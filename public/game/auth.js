@@ -28,7 +28,7 @@ export function normalizeAuthStatus(payload){
   const context=payload.authenticated&&typeof suppliedReauth?.accountContext==='string'&&/^[a-f0-9]{64}$/.test(suppliedReauth.accountContext)?suppliedReauth.accountContext:null;
   const playerId=payload.authenticated&&typeof suppliedReauth?.playerId==='string'&&suppliedReauth.playerId.length>0&&suppliedReauth.playerId.length<=200&&!/[\u0000-\u001f\u007f]/.test(suppliedReauth.playerId)?suppliedReauth.playerId:null;
   const reauthProviders=SOCIAL_PROVIDERS.map(provider=>({...provider,
-    enabled:!!context&&!!playerId&&suppliedReauth?.enabled===true&&account?.linkedProviders.includes(provider.id)===true&&
+    enabled:provider.id!=='google'&&!!context&&!!playerId&&suppliedReauth?.enabled===true&&account?.linkedProviders.includes(provider.id)===true&&
       Array.isArray(suppliedReauth.providers)&&suppliedReauth.providers.some(item=>item?.id===provider.id&&item.enabled===true),
   }));
   return {
@@ -47,7 +47,7 @@ function validReauthenticationParameters(url,provider){
   if(url.searchParams.getAll('max_age').length!==1||url.searchParams.get('max_age')!=='0')return false;
   if(provider==='kakao')return url.searchParams.getAll('prompt').length===1&&url.searchParams.get('prompt')==='login'&&!url.searchParams.has('auth_type');
   if(provider==='naver')return url.searchParams.getAll('auth_type').length===1&&url.searchParams.get('auth_type')==='reauthenticate'&&!url.searchParams.has('prompt');
-  return provider==='google'&&!url.searchParams.has('prompt')&&!url.searchParams.has('auth_type');
+  return false; // Google does not support forcing Google Account reauthentication.
 }
 
 /** Only fixed provider authorize endpoints, never an arbitrary URL supplied to navigation. */

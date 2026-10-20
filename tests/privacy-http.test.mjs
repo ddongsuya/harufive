@@ -362,25 +362,58 @@ test('fresh own export contains own records but no provider subjects, session cr
   assert.deepEqual(f.db.rows('SELECT coins, revision FROM game_players WHERE id = ?', 'export-owner')[0], before);
 });
 
-test('delete requires the exact confirmation and returns pending intake while revoking self sessions', async t => {
+for (const action of ['withdraw', 'delete']) {
+  test(`self ${action} is closed for omitted and explicit own targets without revoking sessions or changing data`, async t => {
+    const f = fixture(t);
+    const accountId = `self-closure-${action}`;
+    const session = f.session(accountId);
+    await f.game.start(accountId, { mode: 'daily', requestId: `self-closure-daily-${action}` });
+    const status = await (await f.call('/api/privacy/status', { headers: session.headers })).json();
+    const context = status.accountContext;
+    assert.equal(status.capabilities.selfClosure, false);
+    assert.equal(status.selfRecoveryReady, false);
+    const tables = ['auth_accounts', 'auth_identities', 'auth_sessions', 'auth_oauth_transactions',
+      'privacy_account_controls', 'privacy_deletion_jobs', 'guardian_links', 'guardian_consents',
+      'game_players', 'game_attempts', 'game_results', 'game_coin_ledger', 'game_weekly_awards', 'game_rate_limits'];
+    const snapshot = () => tables.map(table => f.db.rows(`SELECT * FROM ${table}`));
+    const before = snapshot();
+    for (const target of [{}, { childAccountId: accountId }]) {
+      const response = await f.post(action, session, context, { ...target, confirmation: action });
+      await expectCode(response, 403, 'SELF_CLOSURE_NOT_READY');
+      assert.equal(response.headers.getSetCookie().length, 0);
+      assert.deepEqual(snapshot(), before, 'Blocked self closure must not mutate even the request quota');
+    }
+    for (const target of [{}, { childAccountId: accountId }]) {
+      assert.equal((await f.post('status', session, context, target)).status, 200);
+      assert.equal((await f.post('export', session, context, target)).status, 200);
+    }
+    assert.equal((await f.call('/api/game/bootstrap', { headers: session.headers })).status, 200);
+    assert.equal(f.db.rows('SELECT revoked_at FROM auth_sessions WHERE token_hash = ?', session.hash)[0].revoked_at, null);
+    assert.equal(f.db.rows('SELECT * FROM privacy_deletion_jobs').length, 0);
+  });
+}
+
+test('environment, header and body readiness claims cannot reopen self closure', async t => {
   const f = fixture(t);
-  const session = f.session('delete-owner');
-  await f.game.bootstrap('delete-owner');
+  Object.assign(f.env, { HARU_SELF_CLOSURE_READY: 'true', HARU_SELF_RECOVERY_READY: 'true',
+    HARU_REGISTRATION_OPEN: 'true', selfClosure: true, selfRecoveryReady: true });
+  const accountId = 'self-closure-flags';
+  const session = f.session(accountId);
   const context = await f.context(session);
-  for (const confirmation of [undefined, true, 'withdraw', 'DELETE']) {
-    await expectCode(await f.post('delete', session, context, { confirmation }), 400, 'CONFIRMATION_REQUIRED');
+  for (const action of ['withdraw', 'delete']) {
+    for (const flag of ['selfClosure', 'selfRecoveryReady', 'capabilities']) {
+      await expectCode(await f.post(action, session, context, { confirmation: action, [flag]: true }), 400, 'UNEXPECTED_FIELD');
+    }
+    await expectCode(await f.post(action, session, context, { childAccountId: accountId, confirmation: action }, 'privacy', {
+      headers: { 'X-Haru-Self-Closure': 'true', 'X-Haru-Self-Recovery': 'true' },
+    }), 403, 'SELF_CLOSURE_NOT_READY');
   }
+  const status = await (await f.call('/api/privacy/status', { headers: session.headers })).json();
+  assert.equal(status.capabilities.selfClosure, false);
+  assert.equal(status.selfRecoveryReady, false);
+  assert.equal(status.account.state, 'active');
   assert.equal(f.db.rows('SELECT * FROM privacy_deletion_jobs').length, 0);
-  const response = await f.post('delete', session, context, { confirmation: 'delete' });
-  assert.equal(response.status, 200);
-  const body = await response.json();
-  assert.equal(body.state, 'deletion_pending');
-  assert.equal(body.deletion.status, 'pending');
-  assert.equal(body.deletion.awaitingPolicy, true);
-  assert.equal(body.deletion.completedAt, null);
-  assert.equal(f.db.rows('SELECT * FROM game_players WHERE id = ?', 'delete-owner').length, 1);
-  assert.equal(f.db.rows('SELECT revoked_at FROM auth_sessions WHERE token_hash = ?', session.hash)[0].revoked_at, START);
-  await expectCode(await f.call('/api/privacy/status', { headers: session.headers }), 401, 'SIGN_IN_REQUIRED');
+  assert.equal(f.db.rows('SELECT revoked_at FROM auth_sessions WHERE token_hash = ?', session.hash)[0].revoked_at, null);
 });
 
 for (const action of ['withdraw', 'delete']) {
@@ -388,6 +421,9 @@ for (const action of ['withdraw', 'delete']) {
     const f = fixture(t);
     const accountId = `logout-race-${action}`;
     const session = f.session(accountId);
+    const childId = `${accountId}-child`;
+    f.family(accountId, childId);
+    const childSession = f.session(childId);
     const context = await f.context(session);
     let intervened = false;
     f.db.beforeBatch = async statements => {
@@ -399,13 +435,17 @@ for (const action of ['withdraw', 'delete']) {
       });
       assert.equal(logout.status, 200);
     };
-    const response = await f.post(action, session, context, { confirmation: action });
-    assert.equal(intervened, true, 'Logout must occur immediately before the account mutation batch');
+    const response = await f.post(action, session, context, { childAccountId: childId, confirmation: action });
+    assert.equal(intervened, true, 'Logout must occur immediately before the family account mutation batch');
     await expectCode(response, 403, 'RIGHTS_UNAVAILABLE');
     assert.equal(f.db.rows('SELECT state FROM privacy_account_controls WHERE account_id = ?', accountId)[0].state, 'active');
     assert.equal(f.db.rows('SELECT disabled_at FROM auth_accounts WHERE id = ?', accountId)[0].disabled_at, null);
     assert.equal(f.db.rows('SELECT * FROM privacy_deletion_jobs').length, 0);
     assert.equal(f.db.rows('SELECT revoked_at FROM auth_sessions WHERE token_hash = ?', session.hash)[0].revoked_at, START);
+    assert.equal(f.db.rows('SELECT state FROM privacy_account_controls WHERE account_id = ?', childId)[0].state, 'active');
+    assert.equal(f.db.rows('SELECT disabled_at FROM auth_accounts WHERE id = ?', childId)[0].disabled_at, null);
+    assert.equal(f.db.rows('SELECT revoked_at FROM auth_sessions WHERE token_hash = ?', childSession.hash)[0].revoked_at, null);
+    assert.equal(f.db.rows('SELECT state FROM guardian_links WHERE child_account_id = ?', childId)[0].state, 'active');
   });
 }
 

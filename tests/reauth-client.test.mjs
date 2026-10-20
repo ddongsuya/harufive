@@ -1,20 +1,20 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createAuthApi, normalizeAuthStatus, callbackNotice } from '../public/game/auth.js';
+import { createAuthApi, normalizeAuthStatus, callbackNotice, validateLoginDestination } from '../public/game/auth.js';
 import { GameApiError } from '../public/game/api.js';
 
 const CONTEXT = 'a'.repeat(64), NEXT_CONTEXT = 'b'.repeat(64);
 const LOGIN_URL = 'https://accounts.google.com/o/oauth2/v2/auth?response_type=code&state=fixture-state&nonce=fixture-nonce&code_challenge_method=S256&code_challenge=fixture-challenge';
-const REAUTH_URL = LOGIN_URL + '&max_age=0';
+const REAUTH_URL = LOGIN_URL.replace('https://accounts.google.com/o/oauth2/v2/auth', 'https://kauth.kakao.com/oauth/authorize') + '&max_age=0&prompt=login';
 const response = (body, status = 200, headers = {}) => Response.json(body, { status, headers });
 const status = (reauthentication = {}) => ({
   authenticated: true, sites: { enabled: false },
-  account: { provider: 'google', linkedProviders: ['google'] },
+  account: { provider: 'kakao', linkedProviders: ['kakao'] },
   providers: ['kakao', 'google', 'naver'].map(id => ({ id, enabled: false, reason: 'not_configured' })),
   registration: { open: false },
   reauthentication: {
     enabled: true, accountContext: CONTEXT, playerId: 'player-a',
-    providers: ['kakao', 'google', 'naver'].map(id => ({ id, enabled: id === 'google', reason: id === 'google' ? 'ready' : 'not_linked' })),
+    providers: ['kakao', 'google', 'naver'].map(id => ({ id, enabled: id === 'kakao', reason: id === 'kakao' ? 'ready' : 'not_linked' })),
     ...reauthentication,
   },
 });
@@ -29,7 +29,7 @@ test('reauthentication metadata is disabled unless an authenticated linked provi
   assert.equal(normalized.reauthentication.enabled, true);
   assert.equal(normalized.reauthentication.accountContext, CONTEXT);
   assert.equal(normalized.reauthentication.playerId, 'player-a');
-  assert.deepEqual(normalized.reauthentication.providers.filter(item => item.enabled).map(item => item.id), ['google']);
+  assert.deepEqual(normalized.reauthentication.providers.filter(item => item.enabled).map(item => item.id), ['kakao']);
   assert.equal(normalized.reauthentication.providers.length, 3);
   assert.doesNotMatch(JSON.stringify(normalized), /private@example|raw-session|invented/);
 
@@ -40,7 +40,7 @@ test('reauthentication metadata is disabled unless an authenticated linked provi
     status({ enabled: 'true' }),
     status({ accountContext: 'not-a-context' }),
     status({ accountContext: null }),
-    status({ providers: [{ id: 'google', enabled: 'true' }] }),
+    status({ providers: [{ id: 'kakao', enabled: 'true' }] }),
     { ...status(), account: { provider: 'google', linkedProviders: [] } },
   ];
   for (const raw of invalid) {
@@ -58,9 +58,9 @@ test('reauth start uses only the latest status context in a header and requests 
   } });
   try {
     await api.status();
-    assert.equal(await api.start('google', 'reauth', CONTEXT), REAUTH_URL);
+    assert.equal(await api.start('kakao', 'reauth', CONTEXT), REAUTH_URL);
     const call = calls.at(-1);
-    assert.equal(call.url, '/api/auth/google/start');
+    assert.equal(call.url, '/api/auth/kakao/start');
     assert.equal(call.options.method, 'POST');
     assert.deepEqual(JSON.parse(call.options.body), { intent: 'reauth' });
     assert.equal(call.options.headers['X-Haru-Account'], CONTEXT);
@@ -79,12 +79,12 @@ test('missing, stale and malformed contexts and unlinked providers fail before a
     calls.push({ url, options }); return response(url.endsWith('/status') ? status() : { url: REAUTH_URL });
   } });
   try {
-    await assert.rejects(() => api.start('google', 'reauth', CONTEXT), rejected);
+    await assert.rejects(() => api.start('kakao', 'reauth', CONTEXT), rejected);
     assert.equal(calls.length, 0);
     await api.status();
     for (const [provider, context] of [
-      ['google', undefined], ['google', 'bad'], ['google', NEXT_CONTEXT],
-      ['google', CONTEXT.toUpperCase()], ['kakao', CONTEXT], ['chatgpt', CONTEXT], ['invented', CONTEXT],
+      ['kakao', undefined], ['kakao', 'bad'], ['kakao', NEXT_CONTEXT],
+      ['kakao', CONTEXT.toUpperCase()], ['google', CONTEXT], ['chatgpt', CONTEXT], ['invented', CONTEXT],
     ]) await assert.rejects(() => api.start(provider, 'reauth', context), rejected);
     assert.equal(calls.length, 1);
   } finally { api.destroy(); }
@@ -100,9 +100,9 @@ test('a new status context invalidates an old reauth request without changing lo
   } });
   try {
     await api.status(); accountContext = NEXT_CONTEXT; await api.status();
-    await assert.rejects(() => api.start('google', 'reauth', CONTEXT), rejected);
+    await assert.rejects(() => api.start('kakao', 'reauth', CONTEXT), rejected);
     assert.equal(calls.length, 2);
-    await api.start('google', 'reauth', NEXT_CONTEXT);
+    await api.start('kakao', 'reauth', NEXT_CONTEXT);
     for (const intent of ['login', 'link']) {
       assert.equal(await api.start('google', intent), LOGIN_URL);
       assert.deepEqual(JSON.parse(calls.at(-1).options.body), { intent });
@@ -112,7 +112,6 @@ test('a new status context invalidates an old reauth request without changing lo
 });
 
 for (const [provider, endpoint, extra] of [
-  ['google', 'https://accounts.google.com/o/oauth2/v2/auth', ''],
   ['kakao', 'https://kauth.kakao.com/oauth/authorize', '&prompt=login'],
   ['naver', 'https://nid.naver.com/oauth2/authorize', '&auth_type=reauthenticate'],
 ]) {
@@ -144,11 +143,6 @@ for (const [provider, endpoint, extra] of [
       goodURL.replace(new URL(endpoint).hostname, new URL(endpoint).hostname + '.attacker.example'),
       goodURL + '#private',
     ];
-    if (provider === 'google') invalid.push(
-      goodURL + '&prompt=login',
-      goodURL + '&prompt=login&prompt=login',
-      goodURL + '&auth_type=reauthenticate',
-    );
     if (provider === 'kakao') invalid.push(
       goodURL.replace('&prompt=login', ''),
       goodURL.replace('&prompt=login', '&prompt=consent'),
@@ -177,10 +171,10 @@ test('reauth network errors and rate limits never replay the sensitive start aut
   } });
   try {
     await api.status();
-    await assert.rejects(() => api.start('google', 'reauth', CONTEXT), rejected);
+    await assert.rejects(() => api.start('kakao', 'reauth', CONTEXT), rejected);
     assert.equal(starts, 1);
-    await assert.rejects(() => api.start('google', 'reauth', CONTEXT), error => error.status === 429);
-    await assert.rejects(() => api.start('google', 'reauth', CONTEXT), error => error.status === 429);
+    await assert.rejects(() => api.start('kakao', 'reauth', CONTEXT), error => error.status === 429);
+    await assert.rejects(() => api.start('kakao', 'reauth', CONTEXT), error => error.status === 429);
     assert.equal(starts, 2);
     clock = 31000;
     assert.equal(api.retryIn(), 0);
@@ -193,7 +187,7 @@ test('a refreshed account context rejects an already pending old-context reauth 
   const api = createAuthApi({ fetcher: async path => path.endsWith('/status') ? response(status({ accountContext: context })) : gate.promise });
   let pending;
   try {
-    await api.status(); pending = api.start('google', 'reauth', CONTEXT);
+    await api.status(); pending = api.start('kakao', 'reauth', CONTEXT);
     const expected = assert.rejects(pending, rejected);
     context = NEXT_CONTEXT; await api.status();
     gate.resolve(response({ url: REAUTH_URL })); await expected;
@@ -207,4 +201,28 @@ test('a reauthenticated callback message does not claim that account privileges 
   assert.match(notice.text, /다시 확인/);
   assert.doesNotMatch(notice.text, /권한을 확인했|권한 확인 완료|본인 확인을 완료했/);
   assert.doesNotMatch(callbackNotice('?auth_error=%3Cscript%3Esecret').text, /script|secret/);
+});
+
+
+test('Google reauthentication stays disabled even if stale server metadata says ready, while login and link remain available', async () => {
+  const supplied = status({ providers: [{ id: 'google', enabled: true, reason: 'ready' }] });
+  supplied.account = { provider: 'google', linkedProviders: ['google'] };
+  const normalized = normalizeAuthStatus(supplied);
+  assert.equal(normalized.reauthentication.enabled, false);
+  assert.equal(normalized.reauthentication.providers.find(item => item.id === 'google').enabled, false);
+  assert.throws(() => validateLoginDestination(LOGIN_URL + '&max_age=0', 'google', 'reauth'), rejected);
+  const calls = [];
+  const api = createAuthApi({ fetcher: async (path, options) => {
+    calls.push({ path, options });
+    return response(path.endsWith('/status') ? supplied : { url: LOGIN_URL });
+  } });
+  try {
+    await api.status();
+    await assert.rejects(() => api.start('google', 'reauth', CONTEXT), rejected);
+    assert.equal(calls.length, 1, 'No unsupported reauthentication request is sent');
+    for (const intent of ['login', 'link']) {
+      assert.equal(await api.start('google', intent), LOGIN_URL);
+      assert.deepEqual(JSON.parse(calls.at(-1).options.body), { intent });
+    }
+  } finally { api.destroy(); }
 });

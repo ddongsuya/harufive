@@ -5,6 +5,10 @@ import { createGuardianService } from './guardian-service.mjs';
 import { PrivacyError, accountAllowedSql, accountSessionSql } from './privacy-contract.mjs';
 
 export const PRIVACY_LIMITS = Object.freeze({ bodyBytes: 24576, freshSessionMs: 15 * 60000, requestsPerMinute: 30 });
+// These are server capabilities, not client hints or deployment flags.
+const PRIVACY_CAPABILITIES = Object.freeze({
+  selfExport: true, childManagement: true, selfClosure: false, guardianEnrollment: false,
+});
 const RIGHTS = Object.freeze({
   status: ['childAccountId'], export: ['childAccountId'],
   withdraw: ['childAccountId', 'confirmation'], delete: ['childAccountId', 'confirmation'],
@@ -106,6 +110,14 @@ export async function handlePrivacyRequest(request, { namespace, action, db, env
     if (namespace === 'guardian' && ['create', 'rotate', 'approve'].includes(action)) {
       fail(403, 'CHILD_ENROLLMENT_CLOSED', '만 14세 미만 신규 가입은 제공하지 않아요.');
     }
+    // Closing one's own account revokes the only current rights session.
+    // Until a separate follow-up rights path is ready, reject this on the
+    // server too, including an own ID disguised as a child target. Keep reads
+    // and established family rights separate from self closure.
+    if (namespace === 'privacy' && (action === 'withdraw' || action === 'delete') &&
+        (body.childAccountId ?? identity.userId) === identity.userId && !PRIVACY_CAPABILITIES.selfClosure) {
+      fail(403, 'SELF_CLOSURE_NOT_READY', '탈퇴 후 본인 확인 절차를 준비하고 있어요. 운영 문의를 이용해 주세요.');
+    }
     const database = db.withSession?.('first-primary') || db;
     const sessionProof = { tokenHash: identity.sessionHash };
     await quota(database, identity.userId, Math.floor(now()), sessionProof);
@@ -120,7 +132,7 @@ export async function handlePrivacyRequest(request, { namespace, action, db, env
         accountContext: identity.accountContext, playerId, account, admission: ADMISSION_POLICY,
         guardian: guardian.status(),
         selfRecoveryReady: false,
-        capabilities: { selfExport: true, childManagement: true, selfClosure: false, guardianEnrollment: false },
+        capabilities: PRIVACY_CAPABILITIES,
       });
     }
     if (readChildren) return json(await lifecycle.listChildren({ actorId: identity.userId }));

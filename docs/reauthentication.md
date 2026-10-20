@@ -7,7 +7,8 @@
 - 기존 자체 세션과 이미 연결된 소셜 신원을 가진 활성 계정만 재인증할 수 있다. 계정·소셜 연결·게임 프로필을 새로 생성하지 않는다.
 - 신뢰된 서버 옵션 `reauthEnabled`의 기본값은 false다. 독립 서버는 `sitesEnabled:false`, `loginEnabled:false`, `reauthEnabled:false`를 명시한다. 키나 브라우저 입력만으로 열리지 않는다.
 - `HARU_REGISTRATION_OPEN=false`, `guardianReady:false`, `enrollmentOpen:false`, `guardianEnrollment:false`를 유지한다.
-- 본인 탈퇴·삭제 UI는 `selfClosure:false`, 폐쇄 계정 본인의 후속 권리 경로는 `selfRecoveryReady:false`다. 이번 재인증은 두 기능을 활성화하지 않는다.
+- Google 강제 재인증은 공식 지원 범위에 맞춰 서버 상태·시작·콜백과 클라이언트에서 차단한다. 일반 Google 로그인·계정 연결 코어는 유지한다.
+- 본인 탈퇴·삭제 UI와 HTTP는 `selfClosure:false`, 폐쇄 계정 본인의 후속 권리 경로는 `selfRecoveryReady:false`다. 이번 재인증은 두 기능을 활성화하지 않는다.
 
 ## 2. 최근 인증 시각과 기존 DB 업그레이드
 
@@ -32,7 +33,7 @@ reauthentication: {
 
 `accountContext`는 현재 자체 세션에서 만든 64자리 불투명 문맥이고 `playerId`는 게임의 공개 ID 또는 null이다. 내부 계정 ID·제공자 주체·토큰·세션 해시는 반환하지 않는다. 제공자는 기존 연결과 서버 설정을 모두 만족해야 허용되며 `reauthentication_not_ready`, `sign_in_required`, `not_linked` 등의 비활성 이유를 반환한다. 서버 옵션이 닫혀 있으면 유효 문맥이 있어도 `enabled:false`다.
 
-POST `/api/auth/{kakao|google|naver}/start`에 `{ "intent": "reauth" }`와 상태 조회의 `X-Haru-Account`를 전달한다. 동일 출처·JSON·자체 세션·계정 문맥을 검사한 뒤 원래 계정, 세션 해시, 기존 소셜 신원 행을 흐름에 고정한다. Sites 인증만 있거나 다른 계정·연결되지 않은 제공자이면 시작하지 못한다.
+준비된 카카오·네이버 경로의 POST `/api/auth/{kakao|naver}/start`에 `{ "intent": "reauth" }`와 상태 조회의 `X-Haru-Account`를 전달한다. 동일 출처·JSON·자체 세션·계정 문맥을 검사한 뒤 원래 계정, 세션 해시, 기존 소셜 신원 행을 흐름에 고정한다. Sites 인증만 있거나 다른 계정·연결되지 않은 제공자이면 시작하지 못한다.
 
 콜백은 `/api/auth/{provider}/callback`이다. state·브라우저 바인딩·PKCE·nonce와 고정 issuer/audience·서명을 검사한다. 재인증은 `auth_time`이 반드시 있어야 하며 흐름 시작보다 오래된 확인은 거절한다(초 정밀도와 30초 허용 범위 적용). URL의 재인증 요청 매개변수나 새 토큰의 `iat`만으로 성공 처리하지 않는다.
 
@@ -46,15 +47,19 @@ POST `/api/auth/{kakao|google|naver}/start`에 `{ "intent": "reauth" }`와 상�
 
 ## 5. 제공자별 준비 계약과 미검증 범위
 
-서버가 생성하고 클라이언트가 검증하는 재인증 URL 매개변수는 다음과 같다.
+Context7을 먼저 확인한 뒤 2026-10-20 공식 원문과 대조했다. 이전 Google `max_age=0` 요청과 시험 토큰으로 통과한 결과는 실제 Google 재인증 지원을 증명하지 않는다.
 
-| 제공자 | 현재 코드의 요청 |
+| 제공자 | 현재 처리와 남은 확인 |
 |---|---|
-| Google | `max_age=0` |
-| 카카오 | `max_age=0`, `prompt=login` |
-| 네이버 | `max_age=0`, `auth_type=reauthenticate` |
+| Google | 공식 문서는 Google Account 재인증 요청 미지원을 명시. 상태는 `enabled:false`, `reason:unsupported_by_provider`. 새 시작과 이전 Google 재인증 콜백도 토큰 교환 전에 차단. 일반 로그인·계정 연결 코어 유지 |
+| 카카오 | 준비 요청은 `max_age=0`, `prompt=login`. 공식 문서에 `auth_time`이 있으나 실제 앱 왕복·갱신은 미검증. `prompt=login`은 카카오톡 인앱 브라우저 미지원 |
+| 네이버 | 준비 요청은 `max_age=0`, `auth_type=reauthenticate`. 공식 OIDC·재인증 안내와 별개로 실제 서명된 `auth_time` 발행·갱신은 미확정 |
 
-위 표는 **구현한 요청 계약**이다. 실제 앱에서 해당 요청이 적용되고 서명된 새 `auth_time`이 돌아오는지는 아직 검증하지 않았다. 지원하지 않거나 조용한 기존 로그인만 반환하면 재인증 성공으로 대체하지 않는다. 제공자별 설정·실계정 왕복을 검증하기 전에는 독립 서버의 `reauthEnabled:false`를 유지한다.
+Google의 추가 `auth_time` 반환은 앱 게시·검증, Session age claims 설정과 `claims` 요청이 필요하다. 이 시각은 Google 계정의 마지막 인증 시각이며 새 앱 로그인 시각이 아니다. 이번에는 추가 claims 요청이나 설정을 활성화하지 않는다. 별도의 최근 본인 확인 방법은 미결정이고 필요한 시각이 없거나 오래되면 민감한 권한을 계속 거부한다. [Google 공식 안내](https://developers.google.com/identity/siwg/security-bundle)
+
+카카오·네이버도 실제 지원을 확인하기 전에는 독립 서버의 `reauthEnabled:false`를 유지한다. `max_age`나 재인증 화면·새 토큰 `iat`만으로 성공을 인정하지 않는다. [카카오 REST](https://developers.kakao.com/docs/ko/kakaologin/rest-api), [네이버 가이드](https://developers.naver.com/docs/login/devguide/devguide.md)
+
+`npm run auth:check`는 설정의 존재·형식과 미준비 항목만 검사한다. 실제 인증 시각이나 제공자 지원·가입·배포를 검증하지 않으며 전체 출시 준비는 false다. [인증 연결 점검](auth-connection-checklist.md)을 따른다.
 
 ## 6. 화면의 권한 다시 확인
 
@@ -66,7 +71,7 @@ POST `/api/auth/{kakao|google|naver}/start`에 `{ "intent": "reauth" }`와 상�
 
 ## 7. 폐쇄 계정의 권리 행사는 별도 미완료
 
-철회·삭제 접수는 계정과 기존 세션을 닫는다. 현재 인증 조회와 재인증 시작은 활성 계정만 허용하므로, 이번 흐름으로 폐쇄 계정에 일반 게임 세션을 다시 발급하거나 본인 후속 권리를 제공할 수 없다. 연결된 보호자의 철회 아동 관리 권한은 기존 계약대로 유지한다.
+신뢰된 내부 철회·삭제 코어는 계정과 기존 세션을 닫는다. 후속 권리 경로가 없는 본인 요청은 현재 HTTP에서 `403 SELF_CLOSURE_NOT_READY`로 막고 UI도 비활성으로 유지한다. 현재 인증 조회와 재인증 시작은 활성 계정만 허용하므로, 이번 흐름으로 폐쇄 계정에 일반 게임 세션을 다시 발급하거나 본인 후속 권리를 제공할 수 없다. 연결된 보호자의 철회 아동 관리 권한은 기존 계약대로 유지한다.
 
 실제 삭제는 소셜 신원과 인증 계정도 제거한다. 이후 같은 제공자로 로그인한다고 삭제된 계정을 찾아낼 수 있는 구조가 아니다. 향후에는 별도 본인 확인·권리 전용 세션·최소 완료 증거와 보존 정책을 함께 설계해야 한다. 현재 삭제 접수의 요청자 해시는 사용자 인증 수단이 아니며, 이를 이유로 원문 소셜 식별자를 추가 보관하지 않는다.
 

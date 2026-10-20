@@ -38,6 +38,9 @@ const PROVIDERS = Object.freeze({
     issuers: ['https://accounts.google.com', 'accounts.google.com'],
     scope: 'openid email',
     requiresOIDCFlag: false,
+    // Google Security Bundle exposes session age, but does not support account
+    // reauthentication requests. Do not infer support from max_age/auth_time.
+    supportsReauthentication: false,
   }),
   naver: Object.freeze({
     id: 'naver', name: '네이버', prefix: 'HARU_NAVER',
@@ -446,6 +449,9 @@ async function start(request, provider, options) {
   if (!provider?.enabled) throw new AuthError(503, 'AUTH_NOT_CONFIGURED', 'provider_disabled');
   const body = await readJson(request, ['intent']);
   if (!['login', 'link', 'reauth'].includes(body.intent)) throw new AuthError(400, 'INVALID_REQUEST', 'invalid_request');
+  if (body.intent === 'reauth' && provider.supportsReauthentication === false) {
+    throw new AuthError(503, 'AUTH_NOT_CONFIGURED', 'provider_disabled');
+  }
   if (!(body.intent === 'reauth' ? options.reauthEnabled : options.loginEnabled)) {
     throw new AuthError(503, 'AUTH_NOT_CONFIGURED', 'provider_disabled');
   }
@@ -664,6 +670,11 @@ async function callback(request, provider, options) {
         await contextHash(request, options.sitesUserId), at).first();
     if (!flow) throw new AuthError(400, 'INVALID_REQUEST', 'state_invalid');
     claimedFlow = flow;
+    // A previously persisted flow must honor the current provider contract
+    // before exchanging any authorization code or mutating account sessions.
+    if (flow.intent === 'reauth' && provider.supportsReauthentication === false) {
+      throw new AuthError(503, 'AUTH_NOT_CONFIGURED', 'provider_disabled');
+    }
     if (!(flow.intent === 'reauth' ? options.reauthEnabled : options.loginEnabled)) {
       throw new AuthError(503, 'AUTH_NOT_CONFIGURED', 'provider_disabled');
     }
@@ -759,7 +770,8 @@ export async function handleAuthRequest(request, {
       const resolved = await resolveInternal(request, options);
       const reauthProviders = AUTH_PROVIDER_IDS.map(id => {
         const config = providerConfig(id, env);
-        const reason = !reauthEnabled ? 'reauthentication_not_ready' : !resolved?.sessionHash ? 'sign_in_required'
+        const reason = config.supportsReauthentication === false ? 'unsupported_by_provider'
+          : !reauthEnabled ? 'reauthentication_not_ready' : !resolved?.sessionHash ? 'sign_in_required'
           : !resolved.linkedProviders.includes(id) ? 'not_linked' : config.reason;
         return { id, name: config.name, enabled: reason === 'ready', reason };
       });

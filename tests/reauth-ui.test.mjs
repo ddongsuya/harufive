@@ -5,7 +5,7 @@ import { auditMarkup } from './helpers/markup-source.mjs';
 import { CATALOG, DEFAULT_EQUIPPED } from '../public/game/state.js';
 
 const NOW = Date.parse('2026-10-20T00:00:00Z'), DAY = '2026-10-20', CONTEXT = 'a'.repeat(64);
-const REAUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth?response_type=code&state=fixture-state&nonce=fixture-nonce&code_challenge_method=S256&code_challenge=fixture-challenge&max_age=0';
+const REAUTH_URL = 'https://kauth.kakao.com/oauth/authorize?response_type=code&state=fixture-state&nonce=fixture-nonce&code_challenge_method=S256&code_challenge=fixture-challenge&max_age=0&prompt=login';
 const snapshot = playerId => ({
   serverNow: NOW, today: DAY, state: {
     playerId, name: playerId === 'player-a' ? '기존 계정 토끼' : '바뀐 계정 토끼', coins: 380,
@@ -30,16 +30,16 @@ async function fixture({ enabled = false, fresh = false, hash = '', search = '',
     authHandler: call => {
       if (call.url === '/api/auth/status') return reply({
         authenticated: control.authenticated, sites: { enabled: false },
-        account: control.authenticated ? { provider: 'google', linkedProviders: ['google'] } : null,
-        providers: ['kakao', 'google', 'naver'].map(id => ({ id, enabled: false, reason: 'not_configured' })),
+        account: control.authenticated ? { provider: 'kakao', linkedProviders: ['kakao'] } : null,
+        providers: ['google', 'kakao', 'naver'].map(id => ({ id, enabled: false, reason: 'not_configured' })),
         registration: { open: false },
         reauthentication: {
           enabled: control.enabled, accountContext: control.context, playerId: control.reauthPlayerId,
-          providers: ['kakao', 'google', 'naver'].map(id => ({ id, enabled: control.enabled && id === 'google', reason: control.enabled && id === 'google' ? 'ready' : 'not_configured' })),
+          providers: ['google', 'kakao', 'naver'].map(id => ({ id, enabled: control.enabled && id === 'kakao', reason: control.enabled && id === 'kakao' ? 'ready' : 'not_configured' })),
         },
       });
       if (call.url === '/api/auth/logout') { control.authenticated = false; return reply({ ok: true }); }
-      assert.equal(call.url, '/api/auth/google/start');
+      assert.equal(call.url, '/api/auth/kakao/start');
       assert.deepEqual(call.body, { intent: 'reauth' });
       assert.equal(call.options.headers['X-Haru-Account'], control.context);
       return startHandler?.(call, control) ?? reply({ url: REAUTH_URL });
@@ -68,7 +68,7 @@ test('stale privacy authentication keeps the existing game account and exposes d
     await openPrivacy(h);
     assert.match(h.app.innerHTML, /본인 확인/);
     assert.match(h.app.innerHTML, /limjm900202@gmail\.com/);
-    for (const provider of ['kakao', 'google', 'naver']) {
+    for (const provider of ['google', 'kakao', 'naver']) {
       assert.ok(reauthButton(h, provider)); assert.equal(reauthButton(h, provider).disabled, true);
       assert.equal(await h.click('auth-reauth', { provider }), false);
     }
@@ -85,9 +85,9 @@ test('only an enabled linked reauth provider starts with explicit current-accoun
   const { h } = await fixture({ enabled: true });
   try {
     await openPrivacy(h);
-    assert.equal(reauthButton(h, 'google').disabled, false);
-    for (const provider of ['kakao', 'naver']) assert.equal(reauthButton(h, provider).disabled, true);
-    await h.click('auth-reauth', { provider: 'google' });
+    assert.equal(reauthButton(h, 'kakao').disabled, false);
+    for (const provider of ['google', 'naver']) assert.equal(reauthButton(h, provider).disabled, true);
+    await h.click('auth-reauth', { provider: 'kakao' });
     assert.equal(starts(h).length, 1);
     assert.deepEqual(h.navigations, [{ url: REAUTH_URL, target: '_top' }]);
     assert.equal(sensitive(h).length, 0); assert.equal(h.writes.length, 0);
@@ -99,8 +99,8 @@ test('reauth metadata for another game account cannot start an authorization red
   const { h } = await fixture({ enabled: true, reauthPlayerId: 'player-b' });
   try {
     await openPrivacy(h);
-    assert.equal(reauthButton(h, 'google').disabled, true);
-    assert.equal(await h.click('auth-reauth', { provider: 'google' }), false);
+    assert.equal(reauthButton(h, 'kakao').disabled, true);
+    assert.equal(await h.click('auth-reauth', { provider: 'kakao' }), false);
     assert.equal(starts(h).length, 0); assert.equal(h.navigations.length, 0);
   } finally { h.restore(); }
 });
@@ -125,7 +125,7 @@ test('the callback returns to privacy and rechecks permissions before enabling a
 test('an account-changed reauth start error leaves privacy operations unavailable and never opens a provider', async () => {
   const { h } = await fixture({ enabled: true, startHandler: () => reply({ code: 'ACCOUNT_CHANGED', message: '계정이 바뀌었어요. 다시 확인해 주세요.' }, 409) });
   try {
-    await openPrivacy(h); await h.click('auth-reauth', { provider: 'google' });
+    await openPrivacy(h); await h.click('auth-reauth', { provider: 'kakao' });
     assert.equal(starts(h).length, 1); assert.equal(h.navigations.length, 0);
     assert.match(h.app.innerHTML + h.modal.innerHTML, /바뀌|다시 확인/);
     assert.equal(h.app.querySelector('[data-action="privacy-export"]').disabled, true);
@@ -139,14 +139,14 @@ test('returning after a cancelled reauth request reacquires auth context before 
   const { h } = await fixture({ enabled: true, startHandler: () => ++requests === 1 ? gate.promise : reply({ url: REAUTH_URL }) });
   let first;
   try {
-    await openPrivacy(h); first = h.click('auth-reauth', { provider: 'google' });
+    await openPrivacy(h); first = h.click('auth-reauth', { provider: 'kakao' });
     await until(() => starts(h).length === 1);
     await h.click('nav', { view: 'home' });
     gate.resolve(reply({ url: REAUTH_URL })); await first;
     assert.equal(h.navigations.length, 0);
     await openPrivacy(h);
     assert.equal(starts(h).length, 1, 're-entry alone must not restart provider authentication');
-    await h.click('auth-reauth', { provider: 'google' });
+    await h.click('auth-reauth', { provider: 'kakao' });
     assert.equal(starts(h).length, 2);
     assert.deepEqual(h.navigations, [{ url: REAUTH_URL, target: '_top' }]);
     assert.ok(h.calls.filter(call => call.url === '/api/auth/status').length >= 2);
@@ -158,10 +158,10 @@ test('a session or account change discovered on click blocks start before any pr
     const { h, control } = await fixture({ enabled: true });
     try {
       await openPrivacy(h);
-      assert.equal(reauthButton(h, 'google').disabled, false);
+      assert.equal(reauthButton(h, 'kakao').disabled, false);
       if (changed === 'context') control.context = 'b'.repeat(64);
       else control.reauthPlayerId = 'player-b';
-      await h.click('auth-reauth', { provider: 'google' });
+      await h.click('auth-reauth', { provider: 'kakao' });
       assert.equal(starts(h).length, 0);
       assert.equal(h.navigations.length, 0);
       assert.equal(sensitive(h).length, 0);
@@ -176,7 +176,7 @@ for (const invalidation of ['navigation', 'hidden', 'account change', 'destroy']
     const { h, control } = await fixture({ enabled: true, startHandler: () => gate.promise });
     let pending, restored = false;
     try {
-      await openPrivacy(h); pending = h.click('auth-reauth', { provider: 'google' });
+      await openPrivacy(h); pending = h.click('auth-reauth', { provider: 'kakao' });
       await until(() => starts(h).length === 1);
       if (invalidation === 'navigation') await h.click('nav', { view: 'home' });
       if (invalidation === 'hidden') { h.document.hidden = true; await h.document.fire('visibilitychange'); }

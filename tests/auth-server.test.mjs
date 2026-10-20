@@ -547,7 +547,7 @@ test('ordinary OIDC login records only valid signed auth_time and never treats i
 
 test('reauthentication status is disabled by default and exposes only the current existing profile context', async t => {
   const h = harness(t, { env: { HARU_REGISTRATION_OPEN: 'true' } });
-  const login = await h.login();
+  const login = await h.login({ provider: 'kakao' });
   const owner = (await h.identity(login.cookie)).userId;
   const empty = await (await h.invoke('status', request('/api/auth/status'))).json();
   assert.deepEqual([empty.reauthentication.enabled, empty.reauthentication.accountContext, empty.reauthentication.playerId], [false, null, null]);
@@ -563,13 +563,13 @@ test('reauthentication status is disabled by default and exposes only the curren
   assert.ok(disabled.reauthentication.providers.every(item => item.enabled === false));
   const enabled = await (await h.invoke('status', request('/api/auth/status', { cookie: login.cookie }), { loginEnabled: false, reauthEnabled: true })).json();
   assert.equal(enabled.reauthentication.enabled, true);
-  assert.deepEqual(enabled.reauthentication.providers.filter(item => item.enabled).map(item => item.id), ['google']);
+  assert.deepEqual(enabled.reauthentication.providers.filter(item => item.enabled).map(item => item.id), ['kakao']);
   assert.ok(enabled.providers.every(item => item.enabled === false), 'Reauthentication readiness must not enable login/admission');
   assert.ok(!JSON.stringify(enabled).includes(owner));
 });
 
 test('reauthentication uses a linked identity and atomically replaces the same existing session without creating game data', async t => {
-  for (const provider of ['google', 'kakao', 'naver']) await t.test(provider, async t => {
+  for (const provider of ['kakao', 'naver']) await t.test(provider, async t => {
     const h = harness(t, { env: { HARU_REGISTRATION_OPEN: 'true' } });
     const login = await h.login({ provider });
     const owner = (await h.identity(login.cookie)).userId;
@@ -610,9 +610,9 @@ test('reauthentication rejects absent, malformed, future, pre-flow or token-inco
   ];
   for (const [name, claims] of cases) await t.test(name, async t => {
     const h = harness(t, { env: { HARU_REGISTRATION_OPEN: 'true' } });
-    const login = await h.login();
+    const login = await h.login({ provider: 'kakao' });
     h.setTime(at);
-    const flow = await h.begin({ intent: 'reauth', cookie: login.cookie, claims, options: { reauthEnabled: true } });
+    const flow = await h.begin({ provider: 'kakao', intent: 'reauth', cookie: login.cookie, claims, options: { reauthEnabled: true } });
     const response = await h.callback(flow);
     assert.equal(response.headers.get('Location'), `${ORIGIN}/?auth_error=verification_failed`);
     assert.equal(response.headers.getSetCookie().length, 0);
@@ -624,14 +624,14 @@ test('reauthentication rejects absent, malformed, future, pre-flow or token-inco
 
 test('reauthentication start requires an opaque session, matching UI context and an already linked provider', async t => {
   const h = harness(t, { env: { HARU_REGISTRATION_OPEN: 'true', HARU_SITES_TESTER_EMAIL: 'tester@example.test' }, sitesUserId: 'sites-owner', sitesEmail: 'tester@example.test' });
-  const login = await h.login();
+  const login = await h.login({ provider: 'kakao' });
   const context = (await (await h.invoke('status', request('/api/auth/status', { cookie: login.cookie }))).json()).reauthentication.accountContext;
-  const options = { provider: 'google', reauthEnabled: true };
+  const options = { provider: 'kakao', reauthEnabled: true };
   for (const cookie of ['', `${AUTH_COOKIES.session}=sites`, `${AUTH_COOKIES.session}=signed-out`]) {
-    assert.equal((await h.invoke('start', request('/api/auth/google/start', { method: 'POST', cookie, body: { intent: 'reauth' }, headers: { 'X-Haru-Account': context } }), options)).status, 401);
+    assert.equal((await h.invoke('start', request('/api/auth/kakao/start', { method: 'POST', cookie, body: { intent: 'reauth' }, headers: { 'X-Haru-Account': context } }), options)).status, 401);
   }
   for (const header of [undefined, 'a'.repeat(64)]) {
-    assert.equal((await h.invoke('start', request('/api/auth/google/start', { method: 'POST', cookie: login.cookie, body: { intent: 'reauth' }, headers: header ? { 'X-Haru-Account': header } : {} }), options)).status, 409);
+    assert.equal((await h.invoke('start', request('/api/auth/kakao/start', { method: 'POST', cookie: login.cookie, body: { intent: 'reauth' }, headers: header ? { 'X-Haru-Account': header } : {} }), options)).status, 409);
   }
   assert.equal((await h.invoke('start', request('/api/auth/naver/start', { method: 'POST', cookie: login.cookie, body: { intent: 'reauth' }, headers: { 'X-Haru-Account': context } }), { ...options, provider: 'naver' })).status, 403);
   assert.equal(h.db.rows('SELECT * FROM auth_oauth_transactions').length, 0);
@@ -640,10 +640,10 @@ test('reauthentication start requires an opaque session, matching UI context and
 test('reauthentication cannot switch accounts or link a new subject even when an old signup flag is set', async t => {
   for (const subject of ['different-existing', 'unknown-subject']) await t.test(subject, async t => {
     const h = harness(t, { env: { HARU_REGISTRATION_OPEN: 'true' } });
-    const login = await h.login();
-    await h.login({ subject: 'different-existing' });
+    const login = await h.login({ provider: 'kakao' });
+    await h.login({ provider: 'kakao', subject: 'different-existing' });
     const before = h.db.rows('SELECT * FROM auth_identities');
-    const flow = await h.begin({ intent: 'reauth', cookie: login.cookie, subject, claims: { auth_time: CLOCK / 1000 }, options: { reauthEnabled: true } });
+    const flow = await h.begin({ provider: 'kakao', intent: 'reauth', cookie: login.cookie, subject, claims: { auth_time: CLOCK / 1000 }, options: { reauthEnabled: true } });
     const response = await h.callback(flow);
     assert.equal(response.headers.get('Location'), `${ORIGIN}/?auth_error=account_changed`);
     assert.equal(response.headers.getSetCookie().length, 0);
@@ -656,13 +656,13 @@ test('reauthentication cannot switch accounts or link a new subject even when an
 
 test('login and reauthentication gates remain separate and a disabled callback never exchanges its code', async t => {
   const h = harness(t, { env: { HARU_REGISTRATION_OPEN: 'true' } });
-  const login = await h.login();
+  const login = await h.login({ provider: 'kakao' });
   const context = (await (await h.invoke('status', request('/api/auth/status', { cookie: login.cookie }))).json()).reauthentication.accountContext;
-  const disabled = await h.invoke('start', request('/api/auth/google/start', { method: 'POST', cookie: login.cookie, body: { intent: 'reauth' }, headers: { 'X-Haru-Account': context } }), { provider: 'google' });
+  const disabled = await h.invoke('start', request('/api/auth/kakao/start', { method: 'POST', cookie: login.cookie, body: { intent: 'reauth' }, headers: { 'X-Haru-Account': context } }), { provider: 'kakao' });
   assert.equal(disabled.status, 503);
-  const loginDisabled = await h.invoke('start', request('/api/auth/google/start', { method: 'POST', body: { intent: 'login' } }), { provider: 'google', loginEnabled: false, reauthEnabled: true });
+  const loginDisabled = await h.invoke('start', request('/api/auth/kakao/start', { method: 'POST', body: { intent: 'login' } }), { provider: 'kakao', loginEnabled: false, reauthEnabled: true });
   assert.equal(loginDisabled.status, 503);
-  const flow = await h.begin({ intent: 'reauth', cookie: login.cookie, claims: { auth_time: CLOCK / 1000 }, options: { reauthEnabled: true } });
+  const flow = await h.begin({ provider: 'kakao', intent: 'reauth', cookie: login.cookie, claims: { auth_time: CLOCK / 1000 }, options: { reauthEnabled: true } });
   const before = h.calls.length;
   const response = await h.callback(flow, { options: { loginEnabled: true, reauthEnabled: false } });
   assert.equal(response.headers.get('Location'), `${ORIGIN}/?auth_error=provider_disabled`);
@@ -675,9 +675,9 @@ test('login and reauthentication gates remain separate and a disabled callback n
 test('logout, withdrawal and a newer flow cancel reauthentication during provider exchange', async t => {
   for (const invalidation of ['logout', 'withdrawal', 'new-flow']) await t.test(invalidation, async t => {
     const h = harness(t, { env: { HARU_REGISTRATION_OPEN: 'true' } });
-    const login = await h.login();
+    const login = await h.login({ provider: 'kakao' });
     const owner = (await h.identity(login.cookie)).userId;
-    const flow = await h.begin({ intent: 'reauth', cookie: login.cookie, claims: { auth_time: CLOCK / 1000 }, options: { reauthEnabled: true } });
+    const flow = await h.begin({ provider: 'kakao', intent: 'reauth', cookie: login.cookie, claims: { auth_time: CLOCK / 1000 }, options: { reauthEnabled: true } });
     h.pause = { entered: deferred(), release: deferred() };
     const pending = h.callback(flow);
     await h.pause.entered.promise;
@@ -685,7 +685,7 @@ test('logout, withdrawal and a newer flow cancel reauthentication during provide
     else if (invalidation === 'withdrawal') {
       const { createAccountLifecycle } = await import('../server/account-lifecycle.mjs');
       await createAccountLifecycle({ db: h.db, now: h.now }).withdraw({ actorId: owner, accountId: owner });
-    } else await h.begin({ intent: 'reauth', cookie: flow.cookie, claims: { auth_time: CLOCK / 1000 }, options: { reauthEnabled: true } });
+    } else await h.begin({ provider: 'kakao', intent: 'reauth', cookie: flow.cookie, claims: { auth_time: CLOCK / 1000 }, options: { reauthEnabled: true } });
     h.pause.release.resolve();
     const response = await pending;
     assert.equal(response.headers.getSetCookie().length, 0);
@@ -697,8 +697,8 @@ test('logout, withdrawal and a newer flow cancel reauthentication during provide
 test('queued reauthentication rechecks token, flow and original session expiry in SQL', async t => {
   for (const expiry of ['token', 'flow', 'session']) await t.test(expiry, async t => {
     const h = harness(t, { env: { HARU_REGISTRATION_OPEN: 'true' } });
-    const login = await h.login();
-    const flow = await h.begin({ intent: 'reauth', cookie: login.cookie, claims: { auth_time: CLOCK / 1000 }, options: { reauthEnabled: true } });
+    const login = await h.login({ provider: 'kakao' });
+    const flow = await h.begin({ provider: 'kakao', intent: 'reauth', cookie: login.cookie, claims: { auth_time: CLOCK / 1000 }, options: { reauthEnabled: true } });
     h.db.beforeBatch = statements => {
       if (!statements.some(statement => statement.sql.includes('JOIN auth_sessions previous'))) return;
       h.db.beforeBatch = null;
@@ -716,8 +716,8 @@ test('queued reauthentication rechecks token, flow and original session expiry i
 
 test('an interrupted rotation rolls back the new session instead of retaining two live sessions', async t => {
   const h = harness(t, { env: { HARU_REGISTRATION_OPEN: 'true' } });
-  const login = await h.login();
-  const flow = await h.begin({ intent: 'reauth', cookie: login.cookie, claims: { auth_time: CLOCK / 1000 }, options: { reauthEnabled: true } });
+  const login = await h.login({ provider: 'kakao' });
+  const flow = await h.begin({ provider: 'kakao', intent: 'reauth', cookie: login.cookie, claims: { auth_time: CLOCK / 1000 }, options: { reauthEnabled: true } });
   h.db.sqlite.exec(`CREATE TRIGGER prevent_old_session_revocation BEFORE UPDATE OF revoked_at ON auth_sessions
     WHEN NEW.revoked_at IS NOT NULL BEGIN SELECT RAISE(IGNORE); END`);
   const response = await h.callback(flow);
@@ -729,8 +729,8 @@ test('an interrupted rotation rolls back the new session instead of retaining tw
 
 test('a late reauthentication cookie cannot restore a session after browser logout', async t => {
   const h = harness(t, { env: { HARU_REGISTRATION_OPEN: 'true' } });
-  const login = await h.login();
-  const flow = await h.begin({ intent: 'reauth', cookie: login.cookie, claims: { auth_time: CLOCK / 1000 }, options: { reauthEnabled: true } });
+  const login = await h.login({ provider: 'kakao' });
+  const flow = await h.begin({ provider: 'kakao', intent: 'reauth', cookie: login.cookie, claims: { auth_time: CLOCK / 1000 }, options: { reauthEnabled: true } });
   const delayed = await h.callback(flow);
   assert.equal(delayed.headers.get('Location'), `${ORIGIN}/?auth=reauthenticated#privacy`);
   await h.invoke('logout', request('/api/auth/logout', { method: 'POST', cookie: flow.cookie, body: {} }));
@@ -740,7 +740,7 @@ test('a late reauthentication cookie cannot restore a session after browser logo
 
 
 test('real auth client accepts each server reauthentication status and authorize URL contract', async t => {
-  for (const provider of ['google', 'kakao', 'naver']) await t.test(provider, async t => {
+  for (const provider of ['kakao', 'naver']) await t.test(provider, async t => {
     const h = harness(t, { env: { HARU_REGISTRATION_OPEN: 'true' } });
     const login = await h.login({ provider });
     const owner = (await h.identity(login.cookie)).userId;
@@ -776,8 +776,8 @@ test('real auth client accepts each server reauthentication status and authorize
 
 test('logout after callback authentication but before the atomic rotation prevents a replacement session', async t => {
   const h = harness(t, { env: { HARU_REGISTRATION_OPEN: 'true' } });
-  const login = await h.login();
-  const flow = await h.begin({ intent: 'reauth', cookie: login.cookie, claims: { auth_time: CLOCK / 1000 }, options: { reauthEnabled: true } });
+  const login = await h.login({ provider: 'kakao' });
+  const flow = await h.begin({ provider: 'kakao', intent: 'reauth', cookie: login.cookie, claims: { auth_time: CLOCK / 1000 }, options: { reauthEnabled: true } });
   h.db.beforeBatch = async statements => {
     if (!statements.some(statement => statement.sql.includes('JOIN auth_sessions previous'))) return;
     h.db.beforeBatch = null;
@@ -815,4 +815,59 @@ test('an old open-registration flag cannot admit an unknown Sites identity or im
   assert.equal(await h.identity(applyCookies(response)), null);
   assert.equal(h.db.rows('SELECT * FROM auth_accounts').length, 0);
   assert.equal(h.db.rows('SELECT * FROM game_players').length, 0);
+});
+
+
+test('Google reauthentication is unsupported even when configured, linked and enabled by caller options', async t => {
+  const h = harness(t, { env: { HARU_REGISTRATION_OPEN: 'true', HARU_GOOGLE_REAUTH_ENABLED: 'true' } });
+  const login = await h.login({ provider: 'google', claims: { auth_time: CLOCK / 1000 } });
+  const owner = (await h.identity(login.cookie)).userId;
+  await createGameService({ db: h.db, now: h.now }).bootstrap(owner);
+  for (const reauthEnabled of [false, true]) {
+    const status = await (await h.invoke('status', request('/api/auth/status', { cookie: login.cookie }), { reauthEnabled })).json();
+    assert.equal(status.providers.find(item => item.id === 'google').enabled, true, 'Ordinary Google login stays configured');
+    assert.deepEqual(status.reauthentication.providers.find(item => item.id === 'google'), {
+      id: 'google', name: '구글', enabled: false, reason: 'unsupported_by_provider',
+    });
+    assert.equal(status.reauthentication.enabled, false, 'A Google-only account cannot request reauthentication');
+    const tables = ['auth_accounts', 'auth_identities', 'auth_sessions', 'game_players', 'auth_oauth_transactions'];
+    const before = tables.map(table => h.db.rows(`SELECT * FROM ${table}`));
+    const callsBefore = h.calls.length;
+    const response = await h.invoke('start', request('/api/auth/google/start', {
+      method: 'POST', cookie: login.cookie, body: { intent: 'reauth' },
+      headers: { 'X-Haru-Account': status.reauthentication.accountContext },
+    }), { provider: 'google', reauthEnabled });
+    assert.equal(response.status, 503);
+    assert.equal((await response.json()).code, 'AUTH_NOT_CONFIGURED');
+    assert.equal(response.headers.getSetCookie().length, 0);
+    assert.equal(h.calls.length, callsBefore);
+    assert.deepEqual(tables.map(table => h.db.rows(`SELECT * FROM ${table}`)), before);
+  }
+  const flow = await h.begin({ provider: 'kakao', intent: 'link', cookie: login.cookie, subject: 'linked-kakao' });
+  assert.equal((await h.callback(flow)).headers.get('Location'), `${ORIGIN}/?auth=linked`);
+  const status = await (await h.invoke('status', request('/api/auth/status', { cookie: login.cookie }), { reauthEnabled: true })).json();
+  assert.deepEqual(status.reauthentication.providers.filter(item => item.enabled).map(item => item.id), ['kakao']);
+});
+
+test('a persisted legacy Google reauthentication callback is rejected before token exchange and cannot rotate a session', async t => {
+  const h = harness(t);
+  const login = await h.login({ provider: 'google' });
+  const owner = (await h.identity(login.cookie)).userId;
+  const oldSession = h.db.rows('SELECT * FROM auth_sessions')[0];
+  const identityId = h.db.rows("SELECT id FROM auth_identities WHERE provider='google'")[0].id;
+  // Model a Google reauth flow saved by the previous version. The HTTP start
+  // route no longer permits creating it, even with trusted reauthEnabled=true.
+  const flow = await h.begin({ provider: 'google', cookie: login.cookie, claims: { auth_time: CLOCK / 1000 } });
+  h.db.sqlite.prepare("UPDATE auth_oauth_transactions SET intent='reauth',account_id=?,session_hash=?,identity_id=?")
+    .run(owner, oldSession.token_hash, identityId);
+  const callsBefore = h.calls.length;
+  const before = ['auth_accounts', 'auth_identities', 'auth_sessions', 'game_players'].map(table => h.db.rows(`SELECT * FROM ${table}`));
+  const response = await h.callback(flow, { options: { reauthEnabled: true, loginEnabled: true } });
+  assert.equal(response.headers.get('Location'), `${ORIGIN}/?auth_error=provider_disabled`);
+  assert.equal(response.headers.getSetCookie().length, 0);
+  assert.equal(h.calls.length, callsBefore, 'No token or JWKS request may be sent for unsupported Google reauthentication');
+  assert.deepEqual(['auth_accounts', 'auth_identities', 'auth_sessions', 'game_players'].map(table => h.db.rows(`SELECT * FROM ${table}`)), before);
+  assert.equal(h.db.rows('SELECT * FROM auth_oauth_transactions').length, 0);
+  assert.equal((await h.identity(login.cookie)).userId, owner);
+  assert.equal((await h.callback(flow, { options: { reauthEnabled: true } })).headers.get('Location'), `${ORIGIN}/?auth_error=state_invalid`);
 });

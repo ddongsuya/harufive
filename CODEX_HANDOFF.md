@@ -295,3 +295,19 @@ Context7과 Google 공식 Security Bundle 문서를 대조해 Google Account 강
 전체 **364개 테스트(실패·취소·건너뜀 0)**, 구문·타입 검사, 기존 Sites 5단계 빌드, Worker dry-run(272.89 KiB / gzip 65.55 KiB)을 통과했다. 기존 DB를 보존해 5174를 재시작하고 실제 HTTP에서 DB ready·만 14세 이상·닫힌 가입/인증·Google 재인증 미지원 상태를 확인했다. 이번 새 브라우저 시각 검사·실제 제공자·연령 확인·운영 배포는 하지 않았다.
 
 실제 연결 준비는 [인증 연결 점검](docs/auth-connection-checklist.md), 실행과 검증 한계는 [검증 기록](docs/codex-verification-2026-10-20.md)을 따른다. 무료 플레이·광고 수익 목표와 월 3만 원 이내 예산, 닫힌 신규 가입·본인 탈퇴·폐쇄 계정 복구는 유지한다.
+
+## 19. 카드 등록 없는 운영자 시험본 준비
+
+사용자가 카드 없는 방식을 선택해 Cloudflare Zero Trust 가입 화면에서 나왔다. 결제정보·약관·자동청구 동의를 입력하지 않았고 Zero Trust를 활성화하지 않았다. 별도 `harufive-preview` Worker에서 운영자 1인용 비밀번호 보호 시험본을 준비했다. 원점 후보는 `https://harufive-preview.limjm900202.workers.dev`이며 **원격 Worker는 아직 생성되지 않았다.**
+
+`server/preview-worker.mjs`는 정확한 HTTPS 원점과 유효한 secret이 있어야 모든 경로에 HTTP Basic 인증을 적용한다. 사용자명은 `harufive`, secret은 `HARU_PREVIEW_PASSWORD`이며 무작위 32바이트의 정규 base64url 43자 형식이다. 실제 비밀번호는 생성·입력하지 않았다. 다음 단계에서 사용자가 Cloudflare의 secret 입력란에 직접 설정하며 소스·채팅·로그에 남기지 않는다.
+
+시험 인증을 통과한 요청만 명시된 정적 자산 14개로 전달한다. DB·제공자 키·가입 플래그는 전달하지 않고 인증 헤더도 하위 처리기에서 제거한다. secret 미설정·형식 오류는 503, 비밀번호 누락·오류는 401이다. 캐시·검색 색인을 막고 기존 게임 인증과 시험용 접근 인증을 분리한다. **이 시험본은 안내 화면 검수용으로, 실제 게임 플레이는 지원하지 않는다.** 인증 후에도 DB가 없어 health·인증 상태·게임 bootstrap API는 503을 반환한다.
+
+`npm run build:preview`는 `.local/private-preview/worker.mjs` 단일 모듈을 만들고 `npm run check:preview`는 격리된 환경에서 오프라인 Wrangler dry-run을 수행한다. 원격 배포 명령은 제공하지 않는다. 기존 Sites·로컬 Node·로컬 Worker 설정과 DB는 보존한다.
+
+전체 **378개 테스트(실패·취소·건너뜀 0)**, 구문·타입 검사, 기존 Sites 빌드와 시험본 dry-run을 통과했다. 자산 14개를 포함한 시험본은 611,668바이트, gzip 152,455바이트다. 실제 로컬 workerd에서도 테스트 전용 비밀번호와 합성 HTTPS 요청 원점을 사용해 인증·자산·DB 없음·비밀번호 교체·HEAD를 확인했다. 이는 실제 원격 HTTPS·브라우저 인증창·무료 CPU 한도 검증이 아니다.
+
+Cloudflare의 최초 Hello World 생성은 자동 승인 검토가 거절했다. 카드 없는 방식의 승인만으로 최초 미보호 예제 페이지의 공개 배포까지 승인되지 않았다는 이유다. 재시도·다른 경로 우회는 하지 않았다. 다음 원격 단계에는 게임 자료가 없는 기본 예제 페이지를 해당 주소에 먼저 생성하고 검증한 보호 코드로 교체하는 구체적 사용자 승인이 필요하다. 보호 코드의 secret 설정 전에는 503으로 차단된다. 기존 서비스 변경·원격 DB 생성·유료 전환·PR 병합은 하지 않았다.
+
+설정 계약과 미완료 범위는 [카드 등록 없는 시험 환경](docs/card-free-preview.md), 실제 검사 결과는 [검증 기록](docs/codex-verification-2026-10-20.md)을 따른다.

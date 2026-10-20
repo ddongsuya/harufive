@@ -122,7 +122,7 @@ await test('release client uses authenticated server snapshots and real controll
       await h.click('nav',{view:'profile'});assert.match(html(h),/이전토끼/);assert.match(html(h),/9,999 테스트 코인/);assert.match(html(h),/합산하지 않아요/);assert.match(html(h),/data-action="auth-logout"/);
       await h.click('nav',{view:'shop'});await h.click('character',{id:'character-cat'});assert.equal(h.modal.querySelector('[data-action="buy-character"]').disabled,true);await h.click('close-modal',{},true);
       await h.click('shop-select',{id:'hat-sprout'});await h.click('buy',{id:'hat-sprout'});assert.match(html(h),/함께하는 중/);assert.match(html(h),/aria-label="보유 코인 100개/);
-      await h.click('shop-tab',{tab:'collection'});assert.match(html(h),/준비 중인 스타일/);assert.doesNotMatch(html(h),/₩|가격 검토안/);
+      await h.click('shop-tab',{tab:'collection'});assert.match(html(h),/미리보기용 스타일/);assert.doesNotMatch(html(h),/₩|가격 검토안/);
       assert.equal(h.storage.get('haru-five-playtest-v1'),legacy);assert.equal(h.writes.filter(w=>w.key==='haru-five-playtest-v1').length,0);
       assert.deepEqual(auditMarkup(h.markup()).issues,[]);
     }finally{h.restore();}

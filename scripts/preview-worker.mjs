@@ -12,6 +12,8 @@ import { STANDALONE_GAME_ASSETS } from '../server/standalone-assets.mjs';
 const PROJECT = path.resolve(fileURLToPath(new URL('../', import.meta.url)));
 const WORK = path.join(PROJECT, '.local', 'private-preview');
 const CONFIG = path.join(PROJECT, 'wrangler.preview.jsonc');
+const CONNECTED_WORK = path.join(PROJECT, '.local', 'connected-preview');
+const CONNECTED_CONFIG = path.join(PROJECT, 'wrangler.connected-preview.jsonc');
 const WRANGLER = path.join(PROJECT, 'node_modules', 'wrangler', 'wrangler-dist', 'cli.js');
 export const PREVIEW_ORIGIN = 'https://harufive-preview.limjm900202.workers.dev';
 export const PREVIEW_GZIP_LIMIT = 3 * 1024 * 1024;
@@ -28,6 +30,17 @@ export const PREVIEW_CONFIG = Object.freeze({
   observability: { enabled: false },
   vars: { HARU_AUTH_ORIGIN: PREVIEW_ORIGIN, HARU_REGISTRATION_OPEN: 'false' },
 });
+export const CONNECTED_PREVIEW_CONFIG = Object.freeze({
+  ...PREVIEW_CONFIG,
+  main: '.local/connected-preview/worker.mjs',
+  // This placeholder is only for local format verification. A real database
+  // must be configured and migrated separately before any connected use.
+  d1_databases: [{
+    binding: 'DB', database_name: 'harufive-preview-local-check',
+    database_id: '00000000-0000-0000-0000-000000000000',
+    migrations_dir: 'drizzle', remote: false,
+  }],
+});
 const ASSET_FILES = [
   ['/index.html', 'local/index.html', 'text/html; charset=utf-8'],
   ['/local-boot.js', 'local/boot.js', 'text/javascript; charset=utf-8'],
@@ -40,7 +53,7 @@ const ASSET_FILES = [
 const SERVER_INPUTS = new Set([
   'privacy-contract', 'admission-policy', 'auth-service', 'account-lifecycle',
   'guardian-service', 'privacy-http', 'game-service', 'http', 'standalone-http',
-  'standalone-assets', 'worker', 'preview-worker',
+  'standalone-assets', 'worker', 'preview-worker', 'connected-preview-worker',
 ].map(name => `server/${name}.mjs`));
 const LEGACY_INPUTS = new Set(['question-variants', 'game-core', 'state'].map(name => `legacy/v040/${name}.js`));
 const fail = () => { throw new Error('시험용 Worker 준비를 완료하지 못했습니다. 설정과 허용된 소스 파일을 확인해 주세요.'); };
@@ -67,21 +80,32 @@ async function checkedPath(target, { directory = false, create = false } = {}) {
   return current;
 }
 
-export function validatePreviewConfig(config) {
+export function validatePreviewConfig(config, { connected = false } = {}) {
   // No account, DB, external assets, source maps, custom build hooks or remote
   // command parameters are accepted by this local-only preparation command.
-  if (!isDeepStrictEqual(config, PREVIEW_CONFIG)) fail();
+  if (!isDeepStrictEqual(config, connected ? CONNECTED_PREVIEW_CONFIG : PREVIEW_CONFIG)) fail();
   return config;
 }
 
-export function renderPreviewEntry(assets) {
+export function renderPreviewEntry(assets, { connected = false } = {}) {
   if (!Array.isArray(assets) || assets.length !== ASSET_FILES.length) fail();
   const entries = assets.map((asset, index) => {
     const [route, , contentType] = ASSET_FILES[index];
     if (asset.path !== route || asset.contentType !== contentType || typeof asset.content !== 'string') fail();
     return [route, { contentType, content: asset.content }];
   });
-  return `import previewWorker from '../../server/preview-worker.mjs';
+  const importName = connected ? 'connected-preview-worker' : 'preview-worker';
+  const connection = connected ? `
+      // Defer these reads until after the preview gate authenticates the request.
+      get DB() { return env.DB; },
+      get HARU_GOOGLE_CLIENT_ID() { return env.HARU_GOOGLE_CLIENT_ID; },
+      get HARU_GOOGLE_CLIENT_SECRET() { return env.HARU_GOOGLE_CLIENT_SECRET; },
+      get HARU_KAKAO_CLIENT_ID() { return env.HARU_KAKAO_CLIENT_ID; },
+      get HARU_KAKAO_CLIENT_SECRET() { return env.HARU_KAKAO_CLIENT_SECRET; },
+      get HARU_KAKAO_OIDC_ENABLED() { return env.HARU_KAKAO_OIDC_ENABLED; },
+      get HARU_NAVER_CLIENT_ID() { return env.HARU_NAVER_CLIENT_ID; },
+      get HARU_NAVER_CLIENT_SECRET() { return env.HARU_NAVER_CLIENT_SECRET; },` : '';
+  return `import previewWorker from '../../server/${importName}.mjs';
 const assets = new Map(${JSON.stringify(entries)});
 const assetAdapter = Object.freeze({
   async fetch(request) {
@@ -98,7 +122,7 @@ export default {
     return previewWorker.fetch(request, {
       HARU_AUTH_ORIGIN: ${JSON.stringify(PREVIEW_ORIGIN)},
       HARU_PREVIEW_PASSWORD: env.HARU_PREVIEW_PASSWORD,
-      ASSETS: assetAdapter,
+      ASSETS: assetAdapter,${connection}
     });
   },
 };
@@ -111,8 +135,11 @@ export function measurePreviewBundle(bytes) {
   return { bytes: bytes.byteLength, gzipBytes, sha256: createHash('sha256').update(bytes).digest('hex') };
 }
 
-export async function buildPreviewWorker() {
-  validatePreviewConfig(JSON.parse(await readFile(await checkedPath(CONFIG), 'utf8')));
+export async function buildPreviewWorker({ connected = false } = {}) {
+  if (typeof connected !== 'boolean') fail();
+  const work = connected ? CONNECTED_WORK : WORK;
+  const config = connected ? CONNECTED_CONFIG : CONFIG;
+  validatePreviewConfig(JSON.parse(await readFile(await checkedPath(config), 'utf8')), { connected });
   const assets = [];
   for (const [route, source, contentType] of ASSET_FILES) {
     const data = await readFile(await checkedPath(path.join(PROJECT, source)));
@@ -122,10 +149,10 @@ export async function buildPreviewWorker() {
     if (route === '/index.html') content = content.replace('하루다섯 · 로컬 개발', '하루다섯 · 비공개 시험');
     assets.push({ path: route, contentType, content });
   }
-  await checkedPath(WORK, { directory: true, create: true });
-  const entry = await checkedPath(path.join(WORK, 'entry.mjs'), { create: true });
-  const output = await checkedPath(path.join(WORK, 'worker.mjs'), { create: true });
-  await writeFile(entry, renderPreviewEntry(assets));
+  await checkedPath(work, { directory: true, create: true });
+  const entry = await checkedPath(path.join(work, 'entry.mjs'), { create: true });
+  const output = await checkedPath(path.join(work, 'worker.mjs'), { create: true });
+  await writeFile(entry, renderPreviewEntry(assets, { connected }));
   const result = await build({
     absWorkingDir: PROJECT, entryPoints: [entry], outfile: output,
     bundle: true, write: false, platform: 'browser', format: 'esm', target: 'es2022',
@@ -138,7 +165,7 @@ export async function buildPreviewWorker() {
   // Include only the server's known modules and the installed jose JS modules
   // they import; never glob runtime files or copy a dependency directory.
   if (Object.keys(result.metafile.inputs).some(input =>
-    input !== '.local/private-preview/entry.mjs' && !SERVER_INPUTS.has(input) && !LEGACY_INPUTS.has(input) &&
+    input !== path.relative(PROJECT, entry).split(path.sep).join('/') && !SERVER_INPUTS.has(input) && !LEGACY_INPUTS.has(input) &&
     !/^node_modules\/jose\/dist\/webapi\/[a-z0-9_/-]+\.js$/.test(input))) fail();
   const bytes = result.outputFiles[0].contents;
   const measured = measurePreviewBundle(bytes);
@@ -180,15 +207,16 @@ require('node:module').syncBuiltinESMExports();
 `;
 }
 
-export function previewDryRunCommand(runtimeDirectory) {
+export function previewDryRunCommand(runtimeDirectory, { connected = false } = {}) {
   return ['--require', path.join(runtimeDirectory, 'offline.cjs'), WRANGLER, 'deploy',
-    '--dry-run', '--outdir', path.join(runtimeDirectory, 'bundle'), '--config', CONFIG,
+    '--dry-run', '--outdir', path.join(runtimeDirectory, 'bundle'), '--config', connected ? CONNECTED_CONFIG : CONFIG,
     '--env-file', path.join(runtimeDirectory, 'empty.env')];
 }
 
-async function dryRunPreview() {
+async function dryRunPreview({ connected = false } = {}) {
   await checkedPath(WRANGLER);
-  const runtimeDirectory = await mkdtemp(path.join(await checkedPath(WORK, { directory: true }), 'offline-'));
+  const work = connected ? CONNECTED_WORK : WORK;
+  const runtimeDirectory = await mkdtemp(path.join(await checkedPath(work, { directory: true }), 'offline-'));
   await checkedPath(runtimeDirectory, { directory: true });
   await mkdir(path.join(runtimeDirectory, 'bundle'));
   await writeFile(path.join(runtimeDirectory, 'offline.cjs'), offlinePreloadSource());
@@ -196,7 +224,7 @@ async function dryRunPreview() {
   return await new Promise((resolve, reject) => {
     // Output is intentionally suppressed: Wrangler logs must not become a
     // channel for machine details or a future library's environment diagnostics.
-    const child = spawn(process.execPath, previewDryRunCommand(runtimeDirectory), {
+    const child = spawn(process.execPath, previewDryRunCommand(runtimeDirectory, { connected }), {
       cwd: runtimeDirectory, env: previewChildEnvironment(process.env, runtimeDirectory),
       stdio: 'ignore', windowsHide: true,
     });
@@ -207,14 +235,16 @@ async function dryRunPreview() {
 }
 
 export async function runPreviewWorker(args = process.argv.slice(2), write = message => console.log(message)) {
-  if (args.length !== 1 || !['build', 'dry-run'].includes(args[0])) {
-    write('사용법: node scripts/preview-worker.mjs build 또는 dry-run. 추가 인수와 원격 작업은 지원하지 않습니다.');
+  if (args.length !== 1 || !['build', 'dry-run', 'connected-build', 'connected-dry-run'].includes(args[0])) {
+    write('사용법: node scripts/preview-worker.mjs build, dry-run, connected-build 또는 connected-dry-run. 추가 인수와 원격 작업은 지원하지 않습니다.');
     return 2;
   }
   try {
-    const result = await buildPreviewWorker();
-    if (args[0] === 'dry-run') await dryRunPreview();
-    write(`비공개 시험용 단일 Worker 준비 완료: 자산 ${result.assetCount}개, gzip ${result.gzipBytes}바이트. ${args[0] === 'dry-run' ? '오프라인 dry-run 통과. ' : ''}원격 배포는 실행하지 않았습니다.`);
+    const connected = args[0].startsWith('connected-');
+    const dryRun = args[0].endsWith('dry-run');
+    const result = await buildPreviewWorker({ connected });
+    if (dryRun) await dryRunPreview({ connected });
+    write(`${connected ? '기존 계정 연결용' : '정적'} 비공개 시험 Worker 준비 완료: 자산 ${result.assetCount}개, gzip ${result.gzipBytes}바이트. ${dryRun ? '오프라인 dry-run 통과. ' : ''}원격 배포·실제 로그인은 실행하지 않았습니다.`);
     return 0;
   } catch {
     write('시험용 Worker 준비를 완료하지 못했습니다. 로컬 설정과 설치 상태를 확인해 주세요. 원격 배포는 실행하지 않았습니다.');

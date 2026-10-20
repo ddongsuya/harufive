@@ -21,12 +21,14 @@ Codex로 이어서 개발할 때는 [인수인계](CODEX_HANDOFF.md)를 먼저 �
 - Windows + Node 24.13.0에서 인계 원본 156개 테스트·검사·빌드를 재현했다. 독립 환경 1단계는 164개, 정보 관리 UI를 추가하기 전의 보호자 서버 단계는 **230개 테스트·타입 검사·기존 Sites 빌드 통과**를 확인했다. 정보 관리 UI 단계는 271개, 기존 계정 재인증 단계는 342개, 독립 Worker 준비 단계는 **349개 전체 테스트·구문/타입 검사·기존 5단계 빌드와 별도 Worker dry-run 통과**를 확인했다. 만 14세 이상 정책 단계에서는 전체 **353개 테스트·구문/타입 검사·Worker dry-run 통과**를 확인했다. 세부 결과와 과거 검증 범위는 [Codex 검증 기록](docs/codex-verification-2026-10-20.md)을 따른다.
 - 최소 런타임은 Node 22.16.0 이상인 22.x 또는 24 이상이다. `StatementSync.columns()`를 사용하므로 이전 22.13 표기를 수정했고 패키지 버전은 변경하지 않았다. Node 22.16.0 자체의 전체 실행 검증은 아직 하지 않았다.
 - `npm run db:local`로 별도 SQLite DB를 준비하고 `npm run dev:local`로 **http://127.0.0.1:5174**에서 현재 화면을 확인할 수 있다. 재시작해도 로컬 DB를 보존한다. 기본 `npm run dev`는 기존 Sites 개발 경로다.
-- 독립용 `server/standalone-http.mjs`는 기존 플랫폼 인증 헤더·예약 로그인 경로를 사용하지 않고 자체 세션만 인정한다. 가입 검증이 완성되기 전에는 키가 설정돼도 소셜 OAuth 시작·콜백을 열지 않으며 `HARU_REGISTRATION_OPEN=true`가 전달되어도 신규 가입을 닫는다.
+- 독립용 `server/standalone-http.mjs`는 기존 플랫폼 인증 헤더·예약 로그인 경로를 사용하지 않고 자체 세션만 인정한다. 기본 실행기는 키가 설정돼도 소셜 OAuth 시작·콜백을 열지 않으며 `HARU_REGISTRATION_OPEN=true`가 전달되어도 신규 가입을 닫는다. 별도 연결용 시험본만 서버에서 기존 계정 로그인을 선택하며 새 가입은 허용하지 않는다.
 - 로컬 미리보기는 실제 소셜 키·로그인을 대신하지 않는다. 테스트 계정을 자동 생성하지 않으며 로그인 버튼은 준비 상태를 표시한다. 게임 로직은 서버 코드·SQLite 통합 테스트로 검증했다.
 
 실행 방법과 연결 범위는 [로컬 개발 안내](docs/local-development.md), 실제 결과는 [Codex 검증 기록](docs/codex-verification-2026-10-20.md), 보호자 기능의 현재 구현 범위는 [동의·삭제 구현 상태](docs/guardian-implementation-plan.md)와 [운영 연결 안내](docs/privacy-operations.md)를 따른다. 기존 운영 사이트를 변경하거나 독립 호스팅에 배포한 작업은 아니다.
 
 ## 인증 설정 점검
+
+최신 후속 작업에서 비밀번호 보호 뒤 기존 계정의 로그인·기록 저장을 연결하는 [별도 시험본](docs/connected-preview.md), [이용·개인정보 안내 초안](docs/service-policy-draft.md), 모바일 답안 버튼 가림과 화면 초점 수정을 추가했다. 전체 **396개 테스트·검사·빌드**와 실제 로컬 Worker/D1 검증을 통과했다. 사용자 보고에 따른 [개발자 앱 생성 상태](docs/developer-app-setup.md)는 실제 서버 연결과 구분한다. 원격 Worker·DB·첫 가입·실제 제공자 로그인은 아직 미완료다.
 
 `npm run auth:check`로 실제 키 없이 누락 설정과 준비 상태를 확인할 수 있다. 허용된 프로세스 환경값만 검사하며 비밀값 출력·환경 파일 자동 읽기·네트워크·DB 변경을 하지 않는다. 설정 형식과 실제 로그인·재인증 지원은 구분하고 전체 출시 준비는 false로 유지한다. [인증 연결 점검](docs/auth-connection-checklist.md)을 따른다.
 

@@ -7,11 +7,12 @@ import path from 'node:path';
 import test from 'node:test';
 import { pathToFileURL } from 'node:url';
 import {
-  buildPreviewWorker, measurePreviewBundle, offlinePreloadSource, PREVIEW_CONFIG,
+  buildPreviewWorker, CONNECTED_PREVIEW_CONFIG, measurePreviewBundle, offlinePreloadSource, PREVIEW_CONFIG,
   PREVIEW_GZIP_LIMIT, PREVIEW_ORIGIN, previewChildEnvironment, previewDryRunCommand,
   runPreviewWorker, validatePreviewConfig,
 } from '../scripts/preview-worker.mjs';
 import { STANDALONE_GAME_ASSETS } from '../server/standalone-assets.mjs';
+import { createSQLiteD1 } from './helpers/d1-test-db.mjs';
 
 test('preview preparation rejects remote arguments without echoing them or building', async () => {
   for (const args of [[], ['deploy'], ['dry-run', '--remote'], ['build', 'private-token-marker']]) {
@@ -31,6 +32,22 @@ test('preview config admits no external bindings, build commands, source maps or
     { main: 'server/worker.mjs' }, { find_additional_modules: true },
     { vars: { ...PREVIEW_CONFIG.vars, HARU_AUTH_ORIGIN: 'https://example.com' } },
   ]) assert.throws(() => validatePreviewConfig({ ...structuredClone(PREVIEW_CONFIG), ...additions }));
+});
+
+test('connected preparation accepts only its explicit local DB placeholder and isolated dry-run target', () => {
+  assert.equal(validatePreviewConfig(structuredClone(CONNECTED_PREVIEW_CONFIG), { connected: true }).name, 'harufive-preview');
+  assert.throws(() => validatePreviewConfig(CONNECTED_PREVIEW_CONFIG));
+  assert.throws(() => validatePreviewConfig(PREVIEW_CONFIG, { connected: true }));
+  for (const extra of [
+    { account_id: 'unexpected' }, { assets: { directory: './public' } },
+    { vars: { ...CONNECTED_PREVIEW_CONFIG.vars, HARU_GOOGLE_CLIENT_SECRET: 'private-marker' } },
+    { d1_databases: [{ ...CONNECTED_PREVIEW_CONFIG.d1_databases[0], remote: true }] },
+    { d1_databases: [{ ...CONNECTED_PREVIEW_CONFIG.d1_databases[0], database_id: 'real-database' }] },
+    { main: 'server/connected-preview-worker.mjs' }, { upload_source_maps: true },
+  ]) assert.throws(() => validatePreviewConfig({ ...structuredClone(CONNECTED_PREVIEW_CONFIG), ...extra }, { connected: true }));
+  const args = previewDryRunCommand(path.join(os.tmpdir(), 'haru-connected-check'), { connected: true });
+  assert.ok(args.includes('--dry-run') && args.includes('--env-file'));
+  assert.match(args[args.indexOf('--config') + 1], /wrangler\.connected-preview\.jsonc$/);
 });
 
 test('dry-run uses isolated homes and never inherits provider, proxy or Cloudflare credentials', () => {
@@ -95,7 +112,7 @@ test('built single module embeds exactly the public manifest and keeps auth conf
     if (old === undefined) delete process.env.HARU_PREVIEW_PASSWORD;
     else process.env.HARU_PREVIEW_PASSWORD = old;
   }
-  assert.equal(result.assetCount, 14);
+  assert.equal(result.assetCount, STANDALONE_GAME_ASSETS.length + 2);
   assert.ok(result.gzipBytes < PREVIEW_GZIP_LIMIT);
   const code = await readFile(result.output, 'utf8');
   assert.doesNotMatch(code, /must-not-be-embedded-private-environment-marker|sourceMappingURL=/);
@@ -140,4 +157,59 @@ test('built single module embeds exactly the public manifest and keeps auth conf
     if (previous) Object.defineProperty(crypto.subtle, 'timingSafeEqual', previous);
     else delete crypto.subtle.timingSafeEqual;
   }
+});
+
+test('built connected module delays DB and OAuth reads until authenticated and keeps account creation closed', async t => {
+  const result = await buildPreviewWorker({ connected: true });
+  assert.equal(result.assetCount, STANDALONE_GAME_ASSETS.length + 2);
+  assert.ok(result.inputs.includes('server/connected-preview-worker.mjs'));
+  const module = await import(`${pathToFileURL(result.output).href}?connected-test=${result.sha256}`);
+  assert.deepEqual(Object.keys(module), ['default']);
+  const previous = Object.getOwnPropertyDescriptor(crypto.subtle, 'timingSafeEqual');
+  Object.defineProperty(crypto.subtle, 'timingSafeEqual', {
+    configurable: true, value: (a, b) => timingSafeEqual(Buffer.from(a), Buffer.from(b)),
+  });
+  t.after(() => {
+    if (previous) Object.defineProperty(crypto.subtle, 'timingSafeEqual', previous);
+    else delete crypto.subtle.timingSafeEqual;
+  });
+  const db = createSQLiteD1(); t.after(() => db.close());
+  const password = Buffer.alloc(32, 0x4b).toString('base64url');
+  const authorization = `Basic ${Buffer.from(`harufive:${password}`).toString('base64')}`;
+  const allowed = {
+    DB: db,
+    HARU_GOOGLE_CLIENT_ID: 'connected-build-fixture-client',
+    HARU_GOOGLE_CLIENT_SECRET: 'connected-build-fixture-secret',
+  };
+  const reads = [];
+  const env = { HARU_PREVIEW_PASSWORD: password };
+  for (const [name, value] of Object.entries(allowed)) {
+    Object.defineProperty(env, name, { get() { reads.push(name); return value; } });
+  }
+  for (const name of ['HARU_AUTH_ORIGIN', 'HARU_REGISTRATION_OPEN', 'HARU_SITES_TESTER_EMAIL', 'CLOUDFLARE_API_TOKEN']) {
+    Object.defineProperty(env, name, { get() { assert.fail(`Unapproved environment read: ${name}`); } });
+  }
+  for (const route of ['/', '/api/auth/status', '/api/auth/google/callback?code=x&state=y']) {
+    assert.equal((await module.default.fetch(new Request(`${PREVIEW_ORIGIN}${route}`), env)).status, 401);
+  }
+  assert.deepEqual(reads, []);
+  assert.equal((await module.default.fetch(new Request('https://other.example/', { headers: { authorization } }), env)).status, 403);
+  assert.deepEqual(reads, []);
+  const statusResponse = await module.default.fetch(new Request(`${PREVIEW_ORIGIN}/api/auth/status`, { headers: { authorization } }), env);
+  assert.equal(statusResponse.status, 200);
+  const status = await statusResponse.json();
+  assert.equal(status.providers.find(provider => provider.id === 'google').enabled, true);
+  assert.equal(status.registration.open, false);
+  assert.equal(status.registration.ageVerificationReady, false);
+  assert.equal(status.reauthentication.enabled, false);
+  assert.equal(status.sites.enabled, false);
+  assert.ok(reads.includes('DB') && reads.includes('HARU_GOOGLE_CLIENT_SECRET'));
+  assert.doesNotMatch(JSON.stringify(status), /connected-build-fixture|HARU_GOOGLE_CLIENT_SECRET/);
+  assert.equal(db.rows('SELECT * FROM auth_accounts').length, 0);
+  const policy = await module.default.fetch(new Request(`${PREVIEW_ORIGIN}/game/policy-views.js`, { headers: { authorization } }), env);
+  assert.equal(policy.status, 200);
+  const bootstrap = await module.default.fetch(new Request(`${PREVIEW_ORIGIN}/api/game/bootstrap`, { headers: { authorization } }), env);
+  assert.equal(bootstrap.status, 401);
+  const code = await readFile(result.output, 'utf8');
+  assert.doesNotMatch(code, /connected-build-fixture-secret|sourceMappingURL=/);
 });

@@ -14,9 +14,11 @@ function failure(status, code, message, headers = {}) {
  * stays closed under the 14+ policy until age/admission verification is ready.
  * Legacy account sessions and data rights do not prove an account's age.
  * @param {Request} request
- * @param {{db?: any, env?: any, now?: () => number, fetch?: typeof globalThis.fetch}} options
+ * existingAccountLogin is a trusted adapter option, never a request/env flag.
+ * It enables only the existing provider tuples enforced by auth-service.
+ * @param {{db?: any, env?: any, now?: () => number, fetch?: typeof globalThis.fetch, existingAccountLogin?: boolean}} options
  */
-export async function handleStandaloneRequest(request, { db, env = {}, now = Date.now, fetch = globalThis.fetch } = {}) {
+export async function handleStandaloneRequest(request, { db, env = {}, now = Date.now, fetch = globalThis.fetch, existingAccountLogin = false } = {}) {
   const url = new URL(request.url);
   const settings = { ...env, HARU_REGISTRATION_OPEN: 'false' };
   if (settings.HARU_AUTH_ORIGIN) {
@@ -39,7 +41,7 @@ export async function handleStandaloneRequest(request, { db, env = {}, now = Dat
     const [first, second] = auth[1].split('/');
     return handleAuthRequest(request, {
       action: second || first, provider: second ? first : undefined,
-      db, env: settings, now, fetch, sitesEnabled: false, loginEnabled: false, reauthEnabled: false,
+      db, env: settings, now, fetch, sitesEnabled: false, loginEnabled: existingAccountLogin === true, reauthEnabled: false,
     });
   }
   const privacy = /^\/api\/(privacy|guardian)\/([a-z]+)$/.exec(url.pathname);

@@ -1,4 +1,4 @@
-import { handleWorkerRequest } from './worker.mjs';
+import { EXISTING_ACCOUNT_AUTH_KEYS, handleWorkerRequest } from './worker.mjs';
 
 const USERNAME = 'harufive';
 // Canonical base64url encoding of 32 bytes; the final two padding bits are zero.
@@ -55,12 +55,15 @@ function credentials(header) {
 
 /** Single-operator preview access, separate from game/account authentication.
  * The generated entry supplies a fixed origin and public-assets adapter. This
- * wrapper never forwards DB bindings, account keys or enablement flags.
+ * default wrapper never forwards DB bindings or account keys. The separate
+ * connected entry explicitly opts into existing-account login after this gate.
+ * Request bodies, headers and environment flags cannot select that mode.
  * @param {Request} request
  * @param {{HARU_AUTH_ORIGIN?: string, HARU_PREVIEW_PASSWORD?: string,
- * ASSETS?: {fetch: (request: Request) => Promise<Response>}}} [env]
+ * ASSETS?: {fetch: (request: Request) => Promise<Response>}, [key: string]: any}} [env]
+ * @param {{existingAccountLogin?: boolean}} [options]
  */
-export async function handlePreviewWorkerRequest(request, env = {}) {
+export async function handlePreviewWorkerRequest(request, env = {}, { existingAccountLogin = false } = {}) {
   try {
     const origin = configuredOrigin(env.HARU_AUTH_ORIGIN);
     if (!origin) return seal(failure(503, 'PREVIEW_NOT_CONFIGURED'), request.method);
@@ -90,8 +93,17 @@ export async function handlePreviewWorkerRequest(request, env = {}) {
     headers.delete('Authorization');
     headers.delete('Proxy-Authorization');
     const downstream = new Request(request, { headers });
-    const response = await handleWorkerRequest(downstream, {
-      HARU_AUTH_ORIGIN: origin, ASSETS: env.ASSETS,
+    const workerEnv = { HARU_AUTH_ORIGIN: origin, ASSETS: env.ASSETS };
+    if (existingAccountLogin === true) {
+      // These reads must remain after the origin/password checks. An anonymous
+      // request cannot cause a DB query or access provider configuration.
+      workerEnv.DB = env.DB;
+      for (const key of EXISTING_ACCOUNT_AUTH_KEYS) {
+        if (typeof env[key] === 'string') workerEnv[key] = env[key];
+      }
+    }
+    const response = await handleWorkerRequest(downstream, workerEnv, {
+      existingAccountLogin: existingAccountLogin === true,
     });
     return seal(response, request.method);
   } catch { return seal(failure(503, 'PREVIEW_UNAVAILABLE'), request.method); }

@@ -102,12 +102,13 @@ export function inspectAuthReadiness(env = process.env) {
     incomplete: [
       { code: 'PROVIDER_NOT_VERIFIED', message: '키 형식 확인은 실제 로그인·계정 연결 성공을 뜻하지 않아요. 제공자 콘솔과 실제 응답 검증이 남아 있어요.' },
       { code: 'LOCAL_CREDENTIALS_UNUSED', message: '현재 독립 로컬 실행기는 실제 키를 전달하지 않으므로 이 설정을 로그인에 사용하지 않아요.' },
-      { code: 'STANDALONE_AUTH_CLOSED', message: '독립 실행의 실제 로그인과 최근 본인 확인은 아직 닫혀 있어요.' },
+      { code: 'STANDALONE_AUTH_CLOSED', message: '기본 로컬 실행기와 정적 시험본의 로그인은 닫혀 있어요. 별도 연결용 시험본은 기존 계정 로그인 코드를 제공하지만 실제 앱·키·DB·계정 연결 검증이 필요하며, 최근 본인 확인은 계속 닫혀 있어요.' },
       { code: 'ADMISSION_CLOSED', message: '만 14세 이상 정책이며 실제 연령 확인과 가입 허가가 준비되지 않아 가입은 닫혀 있어요. 만 14세 이상에는 청소년도 포함돼요.' },
       { code: 'SELF_CLOSURE_NOT_READY', message: '자기 계정 탈퇴·삭제 뒤의 재확인 절차가 아직 준비되지 않았어요.' },
       { code: 'DEPLOYMENT_NOT_VERIFIED', message: '도메인 소유·DNS·HTTPS·DB·외부 배포와 운영 조건은 이 도구로 확인하지 않아요.' },
     ],
     limitations: [
+      'runtime 항목은 기본 로컬·정적 시험본을 설명하며, 별도 연결용 시험본의 배포·설정 상태를 조사하지 않아요.',
       '환경변수 파일을 자동으로 읽지 않으며 허용된 process.env 키 8개만 확인해요.',
       '키·ID·토큰·잘못된 URL의 값과 오류 상세는 출력하지 않아요.',
       '공개 도메인 형식만 검사하며 실제 주소 소유나 DNS 상태를 확인하지 않아요.',

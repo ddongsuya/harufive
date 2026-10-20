@@ -1,6 +1,14 @@
 import { handleStandaloneRequest } from './standalone-http.mjs';
 import { STANDALONE_ASSET_PATHS } from './standalone-assets.mjs';
 
+// Keys admitted only by the separate existing-account adapter. Never copy an
+// environment object wholesale or include Sites/guardian/admission settings.
+export const EXISTING_ACCOUNT_AUTH_KEYS = Object.freeze([
+  'HARU_GOOGLE_CLIENT_ID', 'HARU_GOOGLE_CLIENT_SECRET',
+  'HARU_KAKAO_CLIENT_ID', 'HARU_KAKAO_CLIENT_SECRET', 'HARU_KAKAO_OIDC_ENABLED',
+  'HARU_NAVER_CLIENT_ID', 'HARU_NAVER_CLIENT_SECRET',
+]);
+
 const PUBLIC_PATHS = new Set(STANDALONE_ASSET_PATHS);
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]']);
 const SECURITY_HEADERS = Object.freeze({
@@ -44,20 +52,35 @@ function pinnedOrigin(url, env) {
 
 /** Preparation-only Worker entry. No Sites identity, secret/env spread, cron,
  * scheduled maintenance, registration or reauthentication enablement here.
+ * The third server-only argument is used by the separate connected adapter;
+ * two-argument/default callers continue to discard all OAuth settings.
  * @param {Request} request
- * @param {{DB?: any, ASSETS?: {fetch: (request: Request) => Promise<Response>}, HARU_AUTH_ORIGIN?: string}} [env]
+ * @param {{DB?: any, ASSETS?: {fetch: (request: Request) => Promise<Response>}, HARU_AUTH_ORIGIN?: string, [key: string]: any}} [env]
+ * @param {{existingAccountLogin?: boolean}} [options]
  */
-export async function handleWorkerRequest(request, env = {}) {
+export async function handleWorkerRequest(request, env = {}, { existingAccountLogin = false } = {}) {
   try {
     const url = new URL(request.url);
+    // A connected deployment always needs an exact HTTPS origin; it cannot
+    // inherit the preparation entry's loopback-only convenience.
+    if (existingAccountLogin === true && (typeof env.HARU_AUTH_ORIGIN !== 'string' ||
+        !env.HARU_AUTH_ORIGIN.startsWith('https://') || new URL(env.HARU_AUTH_ORIGIN).origin !== env.HARU_AUTH_ORIGIN)) {
+      return seal(jsonFailure(503, 'AUTH_NOT_CONFIGURED'), request.method);
+    }
     const rejected = pinnedOrigin(url, env);
     if (rejected) return seal(rejected, request.method);
     if (url.pathname === '/api' || url.pathname.startsWith('/api/')) {
-      // Only this setting is allowed across the adapter boundary. Provider keys,
-      // guardian keys and any caller/platform identity fields are not forwarded.
+      // Preparation keeps providers closed. The explicit connected adapter adds
+      // only these OAuth keys; guardian and platform identity settings stay out.
       const settings = { HARU_REGISTRATION_OPEN: 'false',
         ...(env.HARU_AUTH_ORIGIN === undefined ? {} : { HARU_AUTH_ORIGIN: env.HARU_AUTH_ORIGIN }) };
-      return seal(await handleStandaloneRequest(request, { db: env.DB, env: settings }), request.method);
+      if (existingAccountLogin === true) {
+        for (const key of EXISTING_ACCOUNT_AUTH_KEYS) {
+          if (typeof env[key] === 'string') settings[key] = env[key];
+        }
+      }
+      return seal(await handleStandaloneRequest(request, { db: env.DB, env: settings,
+        existingAccountLogin: existingAccountLogin === true }), request.method);
     }
     if (!PUBLIC_PATHS.has(url.pathname)) return seal(jsonFailure(404, 'NOT_FOUND'), request.method);
     if (!['GET', 'HEAD'].includes(request.method)) {

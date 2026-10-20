@@ -1,0 +1,23 @@
+{
+  "name": "harufive-preview",
+  "main": ".local/connected-preview/worker.mjs",
+  "compatibility_date": "2026-05-15",
+  "workers_dev": true,
+  "preview_urls": false,
+  "no_bundle": true,
+  "find_additional_modules": false,
+  "upload_source_maps": false,
+  "limits": { "cpu_ms": 10 },
+  "observability": { "enabled": false },
+  "vars": {
+    "HARU_AUTH_ORIGIN": "https://harufive-preview.limjm900202.workers.dev",
+    "HARU_REGISTRATION_OPEN": "false"
+  },
+  "d1_databases": [{
+    "binding": "DB",
+    "database_name": "harufive-preview-local-check",
+    "database_id": "00000000-0000-0000-0000-000000000000",
+    "migrations_dir": "drizzle",
+    "remote": false
+  }]
+}

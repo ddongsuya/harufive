@@ -8,6 +8,7 @@ import { SOCIAL_PROVIDERS, SITES_SIGN_IN, providerName, callbackNotice, createAu
 
 import { createPrivacyApi } from './privacy.js';
 import { privacyPage, guardianPage } from './privacy-views.js';
+import { policyDialog } from './policy-views.js';
 
 const SUPPORT_EMAIL = 'limjm900202@gmail.com';
 
@@ -207,9 +208,12 @@ function connectionBanner(){
   if(syncing)return '<div class="connection-banner" role="status">서버의 최신 기록을 확인하고 있어요.</div>';
   return '';
 }
+function policyLinks(){
+  return '<nav class="policy-links" aria-label="서비스 이용과 데이터 안내"><button class="text-link" data-action="policy-open" data-kind="terms">이용 안내</button><button class="text-link" data-action="policy-open" data-kind="privacy">개인정보 안내</button><button class="text-link" data-action="policy-open" data-kind="data">데이터 관리 안내</button></nav>';
+}
 function entryView(){
   const login=connection==='signin';
-  return `<main class="release-entry" id="main"><div class="release-entry-brand">${brand()}</div><section class="card release-entry-card">${avatar({...DEFAULT_EQUIPPED,background:'transparent',pose:'happy'},'entry-avatar')}<span class="tag neutral">출시 준비 · 0.5.1</span><h1>${login?'작은 도전, 나만의 친구와.':connection==='error'?'잠깐, 연결을 확인해 주세요.':'나의 정원을 여는 중이에요.'}</h1><p>${login?'하루 다섯 문제를 풀고, 나의 기록과 도트 친구들을 모아요. 로그인하면 계정에 기록을 간직할 수 있어요.':connection==='error'?escape(connectionError):'로그인 상태와 저장된 기록을 확인하고 있어요.'}</p>${login?`${authFeedback()}${socialLoginOptions()}${authStatus?.sites.enabled?`<div class="login-divider"><span>개발 중인 게임 이어가기</span></div><a class="btn secondary full" data-action="auth-sites" href="${escape(SITES_SIGN_IN)}" target="_top" ${authBusy?'aria-disabled="true"':''}>ChatGPT 계정으로 시작하기 ${icon('arrow',true)}</a>`:''}<small>만 14세 이상 이용자를 위한 게임이에요. 게임 이용은 무료예요. 구름토끼부터 함께해요.</small><button class="text-link" data-action="release-info">로그인 · 출시 준비 안내</button>`:connection==='error'?'<button class="btn full" data-action="sync">다시 연결하기</button>':'<div class="entry-loading" role="status">기록을 불러오고 있어요…</div>'}</section><p class="release-entry-foot">매일 5문제 · 주간 랭킹 · 나만의 도트 친구</p><nav class="privacy-entry-links" aria-label="이용 연령과 정보 관리"><button class="text-link" data-action="guardian-open">이용 연령 안내</button><button class="text-link" data-action="privacy-open">나의 정보 관리</button></nav><div class="release-entry-contact">${supportContact()}</div></main>`;
+  return `<main class="release-entry" id="main" tabindex="-1"><div class="release-entry-brand">${brand()}</div><section class="card release-entry-card">${avatar({...DEFAULT_EQUIPPED,background:'transparent',pose:'happy'},'entry-avatar')}<span class="tag neutral">출시 준비 · 0.5.1</span><h1>${login?'작은 도전, 나만의 친구와.':connection==='error'?'잠깐, 연결을 확인해 주세요.':'나의 정원을 여는 중이에요.'}</h1><p>${login?'하루 다섯 문제를 풀고, 나의 기록과 도트 친구들을 모아요. 로그인하면 계정에 기록을 간직할 수 있어요.':connection==='error'?escape(connectionError):'로그인 상태와 저장된 기록을 확인하고 있어요.'}</p>${login?`${authFeedback()}${socialLoginOptions()}${authStatus?.sites.enabled?`<div class="login-divider"><span>개발 중인 게임 이어가기</span></div><a class="btn secondary full" data-action="auth-sites" href="${escape(SITES_SIGN_IN)}" target="_top" ${authBusy?'aria-disabled="true"':''}>ChatGPT 계정으로 시작하기 ${icon('arrow',true)}</a>`:''}<small>만 14세 이상 이용자를 위한 게임이에요. 게임 이용은 무료예요. 구름토끼부터 함께해요.</small><button class="text-link" data-action="release-info">로그인 · 출시 준비 안내</button>`:connection==='error'?'<button class="btn full" data-action="sync">다시 연결하기</button>':'<div class="entry-loading" role="status">기록을 불러오고 있어요…</div>'}</section><p class="release-entry-foot">매일 5문제 · 주간 랭킹 · 나만의 도트 친구</p><nav class="privacy-entry-links" aria-label="이용 연령과 정보 관리"><button class="text-link" data-action="guardian-open">이용 연령 안내</button><button class="text-link" data-action="privacy-open">나의 정보 관리</button></nav>${policyLinks()}<div class="release-entry-contact">${supportContact()}</div></main>`;
 }
 function authFeedback(){
   const notice=authError?{kind:'error',text:authError}:authNotice;
@@ -443,7 +447,7 @@ function accountCard(){
   return `<section class="card record-history account-records"><div class="between"><div><h3>계정과 저장된 기록</h3><p class="account-caption">같은 계정으로 다른 기기에서도 이어서 이용해요.</p></div><button class="text-link" data-action="auth-logout" ${authBusy?'disabled':''}>로그아웃</button></div><div class="account-login-heading"><strong>로그인 연결</strong><span class="tag neutral">${current?escape(providerName(current))+'로 이용 중':'연결 확인 중'}</span></div><p class="account-caption">자주 쓰는 로그인을 추가하고 같은 친구와 기록을 만나요.</p><div class="account-login-list">${SOCIAL_PROVIDERS.map(provider=>{
     const isLinked=linked.includes(provider.id),enabled=authStatus?.providers.find(item=>item.id===provider.id)?.enabled===true;
     return `<div class="account-login-row"><div><strong>${provider.name}</strong><small>${isLinked?'이 게임 계정에 연결했어요.':enabled?'지금의 게임 계정에 추가할 수 있어요.':authError?'연결 상태를 다시 확인해 주세요.':'간편 로그인 연결을 준비하고 있어요.'}</small></div><button class="btn secondary small" data-action="auth-link" data-provider="${provider.id}" ${isLinked||!enabled||authBusy?'disabled':''}>${isLinked?'연결됨':enabled?'연결하기':authStatus?'준비 중':'확인 중'}</button></div>`;
-  }).join('')}</div><p class="account-caption">다른 계정에 연결된 로그인은 자동으로 합쳐지지 않아요. 사용하던 계정에서 연결해 주세요.</p><div class="account-login-actions">${authError?'<button class="text-link" data-action="auth-refresh">연결 다시 확인</button>':''}<button class="text-link" data-action="release-info">로그인 · 출시 준비 안내</button>${supportContact()}</div><div class="privacy-account-links"><button class="btn secondary" data-action="privacy-open">${icon('shield',true)} 나의 정보 관리</button><button class="text-link" data-action="guardian-open">이용 연령 안내</button></div><div class="account-data-download"><button class="btn secondary" data-action="export-server">${icon('book',true)} 내 서비스 기록 다운로드</button><p class="account-caption">서비스 기록 파일에는 나의 게임 정보가 담겨 있어요. 다운로드한 파일은 안전하게 보관해 주세요.</p></div>${legacyRecord?`<div class="legacy-record"><strong>이 브라우저의 이전 테스트 기록</strong><p>${escape(legacyRecord.name)} · 공식 도전 ${fmt(legacyRecord.dailyCount)}일 · ${fmt(legacyRecord.coins)} 테스트 코인 · 친구 ${fmt(legacyRecord.friends)}종</p><p>이전 파일을 그대로 보관하고 있어요. 계정의 점수·코인과 합산하지 않아요.</p><button class="text-link" data-action="export-legacy">이전 테스트 기록 JSON 받기 ${icon('arrow',true)}</button></div>`:''}</section>`;
+  }).join('')}</div><p class="account-caption">다른 계정에 연결된 로그인은 자동으로 합쳐지지 않아요. 사용하던 계정에서 연결해 주세요.</p><div class="account-login-actions">${authError?'<button class="text-link" data-action="auth-refresh">연결 다시 확인</button>':''}<button class="text-link" data-action="release-info">로그인 · 출시 준비 안내</button>${supportContact()}</div><div class="privacy-account-links"><button class="btn secondary" data-action="privacy-open">${icon('shield',true)} 나의 정보 관리</button><button class="text-link" data-action="guardian-open">이용 연령 안내</button></div>${policyLinks()}<div class="account-data-download"><button class="btn secondary" data-action="export-server">${icon('book',true)} 내 서비스 기록 다운로드</button><p class="account-caption">서비스 기록 파일에는 나의 게임 정보가 담겨 있어요. 다운로드한 파일은 안전하게 보관해 주세요.</p></div>${legacyRecord?`<div class="legacy-record"><strong>이 브라우저의 이전 테스트 기록</strong><p>${escape(legacyRecord.name)} · 공식 도전 ${fmt(legacyRecord.dailyCount)}일 · ${fmt(legacyRecord.coins)} 테스트 코인 · 친구 ${fmt(legacyRecord.friends)}종</p><p>이전 파일을 그대로 보관하고 있어요. 계정의 점수·코인과 합산하지 않아요.</p><button class="text-link" data-action="export-legacy">이전 테스트 기록 JSON 받기 ${icon('arrow',true)}</button></div>`:''}</section>`;
 }
 function resetPrivacy(){
   if(reauthAttempt){reauthAttempt=null;authApi.cancelPending();authBusy=false;}
@@ -574,7 +578,7 @@ async function beginReauthentication(provider){
 }
 function privacySurface(){
   const reauthentication=state&&authStatus?.reauthentication?.playerId===state.playerId?authStatus.reauthentication:null;
-  return privacyPage({signedIn:!!state&&authStatus?.authenticated!==false,...privacy,busy:privacy.busy||authBusy,reauthentication});
+  return privacyPage({signedIn:!!state&&authStatus?.authenticated!==false,...privacy,busy:privacy.busy||authBusy,reauthentication})+policyLinks();
 }
 function publicPrivacyShell(content){
   return `<main id="main" class="privacy-public" tabindex="-1"><div class="privacy-public-brand">${brand()}</div>${content}</main>`;
@@ -698,6 +702,11 @@ async function handleAction(event){
   if(a==='auth-refresh'){await syncAuth();return;}
   if(a==='auth-dismiss'){authError='';authNotice=null;render();return;}
   if(a==='release-info'){releaseInfoDialog();return;}
+  if(a==='policy-open'){
+    const content=policyDialog(button.dataset.kind);if(!content)return;
+    showModal(content.title,content.subtitle,'<button class="btn secondary full" data-action="close-modal">닫기</button>',content.body);
+    return;
+  }
   if(a==='privacy-open'){await openPrivacy();return;}
   if(a==='guardian-open'){modal.close();refreshGameModal=null;go('guardian');return;}
   if(a==='privacy-back'){go(state?'profile':'home');return;}

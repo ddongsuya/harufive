@@ -30,14 +30,16 @@ export function accountSessionSql(accountExpression, sessionProof) {
     throw new PrivacyError(403, 'SESSION_PROOF_INVALID');
   }
   // Literal insertion is safe only after the exact lowercase-hex validation.
-  // Conservative second boundaries may close access up to 999ms early. Fresh
-  // sessions created within the current second are accepted; HTTP also checks
-  // the precise millisecond age before invoking these services.
+  // Only a verified provider authentication time grants recent-auth rights.
+  // Session creation is not proof of reauthentication; legacy NULL stays denied.
+  // Conservative second boundaries may close access up to 999ms early.
   return `EXISTS (SELECT 1 FROM auth_sessions AS privacy_session
     WHERE privacy_session.account_id = ${accountExpression}
       AND privacy_session.token_hash = '${sessionProof.tokenHash}'
       AND privacy_session.revoked_at IS NULL
       AND CAST(privacy_session.expires_at / 1000 AS INTEGER) > unixepoch('now')
-      AND CAST(privacy_session.created_at / 1000 AS INTEGER) <= unixepoch('now')
-      AND CAST((privacy_session.created_at + 900000) / 1000 AS INTEGER) > unixepoch('now'))`;
+      AND typeof(privacy_session.authenticated_at) = 'integer'
+      AND privacy_session.authenticated_at >= 0
+      AND privacy_session.authenticated_at <= unixepoch('now') * 1000
+      AND CAST((privacy_session.authenticated_at + 900000) / 1000 AS INTEGER) > unixepoch('now'))`;
 }

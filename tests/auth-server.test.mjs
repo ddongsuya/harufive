@@ -1,9 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { DatabaseSync } from 'node:sqlite';
+import { readdirSync, readFileSync } from 'node:fs';
 import { generateKeyPair, exportJWK, SignJWT } from 'jose';
 import { createSQLiteD1 } from './helpers/d1-test-db.mjs';
 import { createGameService } from '../server/game-service.mjs';
-import { AUTH_COOKIES, AUTH_LIMITS, handleAuthRequest, resolveGameIdentity } from '../server/auth-service.mjs';
+import { createAuthApi } from '../public/game/auth.js';
+import { AUTH_COOKIES, AUTH_LIMITS, handleAuthRequest, resolveGameIdentity, resolvePrivacyIdentity } from '../server/auth-service.mjs';
 
 const ORIGIN = 'https://haru-five.example.test';
 const CLOCK = Date.UTC(2026, 9, 20, 0, 0, 0);
@@ -55,6 +58,7 @@ function harness(t, { env = {}, sitesUserId, sitesEmail } = {}) {
   const db = createSQLiteD1();
   t.after(() => db.close());
   let clock = CLOCK;
+  db.sqlite.function('unixepoch', (_modifier) => Math.floor(clock / 1000));
   let serial = 0;
   const codes = new Map();
   const calls = [];
@@ -105,9 +109,10 @@ function harness(t, { env = {}, sitesUserId, sitesEmail } = {}) {
   h.invoke = (action, req, options = {}) => handleAuthRequest(req, { ...h.options, action, ...options });
   h.identity = (cookie = '', options = {}) => resolveGameIdentity(request('/', { cookie }), { ...h.options, ...options });
   h.begin = async ({ provider = 'google', intent = 'login', cookie = '', subject = 'subject-1', claims, header, tamper, options = {} } = {}) => {
-    const response = await h.invoke('start', request(`/api/auth/${provider}/start`, { method: 'POST', cookie, body: { intent } }), { provider, ...options });
+    const headers = intent === 'reauth' ? { 'X-Haru-Account': (await (await h.invoke('status', request('/api/auth/status', { cookie }))).json()).reauthentication.accountContext } : {};
+    const response = await h.invoke('start', request(`/api/auth/${provider}/start`, { method: 'POST', cookie, body: { intent }, headers }), { provider, ...options });
     assert.equal(response.status, 200, await response.clone().text());
-    const url = new URL((await response.json()).url);
+    const url = new URL((await response.clone().json()).url);
     assert.equal(`${url.origin}${url.pathname}`, ENDPOINTS[provider].authorize);
     assert.equal(url.searchParams.get('response_type'), 'code');
     assert.equal(url.searchParams.get('code_challenge_method'), 'S256');
@@ -480,4 +485,285 @@ test('terminated legacy Sites accounts cannot return through trusted tester acce
   assert.equal(await h.identity(`${AUTH_COOKIES.session}=sites`), null);
   assert.equal(h.db.rows('SELECT * FROM auth_accounts').length, 0);
   assert.equal(h.db.rows('SELECT * FROM game_players').length, 0);
+});
+
+
+test('reauthentication migration preserves old accounts, sessions and flows without inventing authentication time', t => {
+  const sqlite = new DatabaseSync(':memory:');
+  t.after(() => sqlite.close());
+  sqlite.exec('PRAGMA foreign_keys = ON');
+  const directory = new URL('../drizzle/', import.meta.url);
+  for (const name of readdirSync(directory).filter(name => /^000[0-4]_.*\.sql$/.test(name)).sort()) {
+    sqlite.exec(readFileSync(new URL(name, directory), 'utf8'));
+  }
+  sqlite.prepare('INSERT INTO auth_accounts (id, created_at) VALUES (?, ?)').run('old-account', CLOCK);
+  sqlite.prepare(`INSERT INTO auth_sessions (token_hash, account_id, provider, created_at, expires_at)
+    VALUES (?, ?, 'google', ?, ?)`).run('a'.repeat(64), 'old-account', CLOCK, CLOCK + 10000);
+  sqlite.prepare(`INSERT INTO auth_oauth_transactions
+    (state_hash,binding_hash,provider,audience,intent,account_id,context_hash,nonce_hash,code_verifier,created_at,expires_at)
+    VALUES (?,?, 'google','client','link','old-account',?,?,?, ?,?)`)
+    .run('b'.repeat(64), 'c'.repeat(64), 'd'.repeat(64), 'e'.repeat(64), 'original-verifier', CLOCK, CLOCK + 10000);
+  sqlite.exec(readFileSync(new URL('0005_recent_reauthentication.sql', directory), 'utf8'));
+  assert.equal(sqlite.prepare('SELECT authenticated_at FROM auth_sessions').get().authenticated_at, null);
+  assert.deepEqual({ ...sqlite.prepare('SELECT intent, session_hash, identity_id, code_verifier FROM auth_oauth_transactions').get() },
+    { intent: 'link', session_hash: null, identity_id: null, code_verifier: 'original-verifier' });
+  assert.equal(sqlite.prepare('SELECT COUNT(*) AS count FROM auth_accounts').get().count, 1);
+  assert.equal(sqlite.prepare('PRAGMA foreign_key_check').all().length, 0);
+  assert.throws(() => sqlite.prepare('UPDATE auth_sessions SET authenticated_at = ?').run(CLOCK + 1), /CHECK/);
+});
+
+test('ordinary OIDC login records only valid signed auth_time and never treats iat as authentication', async t => {
+  for (const authTime of [undefined, Math.floor(CLOCK / 1000) - 3600, Math.floor(CLOCK / 1000)]) await t.test(String(authTime), async t => {
+    const h = harness(t, { env: { HARU_REGISTRATION_OPEN: 'true' } });
+    const login = await h.login({ claims: { auth_time: authTime } });
+    const identity = await resolvePrivacyIdentity(request('/', { cookie: login.cookie }), h.options);
+    assert.equal(identity.authenticatedAt, authTime === undefined ? null : authTime * 1000);
+    assert.equal(h.db.rows('SELECT authenticated_at FROM auth_sessions')[0].authenticated_at, identity.authenticatedAt);
+    assert.ok(await h.identity(login.cookie), 'Missing fresh-auth evidence does not turn a valid game session into a different account');
+  });
+});
+
+test('reauthentication status is disabled by default and exposes only the current existing profile context', async t => {
+  const h = harness(t, { env: { HARU_REGISTRATION_OPEN: 'true' } });
+  const login = await h.login();
+  const owner = (await h.identity(login.cookie)).userId;
+  const empty = await (await h.invoke('status', request('/api/auth/status'))).json();
+  assert.deepEqual([empty.reauthentication.enabled, empty.reauthentication.accountContext, empty.reauthentication.playerId], [false, null, null]);
+  assert.ok(empty.reauthentication.providers.every(item => item.enabled === false));
+  const game = createGameService({ db: h.db, now: h.now });
+  await game.bootstrap(owner);
+  const profile = h.db.rows('SELECT public_id FROM game_players')[0];
+  h.setTime(CLOCK + 20 * 60000);
+  const disabled = await (await h.invoke('status', request('/api/auth/status', { cookie: login.cookie }))).json();
+  assert.equal(disabled.reauthentication.enabled, false);
+  assert.match(disabled.reauthentication.accountContext, /^[a-f0-9]{64}$/);
+  assert.equal(disabled.reauthentication.playerId, profile.public_id);
+  assert.ok(disabled.reauthentication.providers.every(item => item.enabled === false));
+  const enabled = await (await h.invoke('status', request('/api/auth/status', { cookie: login.cookie }), { loginEnabled: false, reauthEnabled: true })).json();
+  assert.equal(enabled.reauthentication.enabled, true);
+  assert.deepEqual(enabled.reauthentication.providers.filter(item => item.enabled).map(item => item.id), ['google']);
+  assert.ok(enabled.providers.every(item => item.enabled === false), 'Reauthentication readiness must not enable login/admission');
+  assert.ok(!JSON.stringify(enabled).includes(owner));
+});
+
+test('reauthentication uses a linked identity and atomically replaces the same existing session without creating game data', async t => {
+  for (const provider of ['google', 'kakao', 'naver']) await t.test(provider, async t => {
+    const h = harness(t, { env: { HARU_REGISTRATION_OPEN: 'true' } });
+    const login = await h.login({ provider });
+    const owner = (await h.identity(login.cookie)).userId;
+    const originalHash = h.db.rows('SELECT token_hash FROM auth_sessions')[0].token_hash;
+    const at = CLOCK + 20 * 60000;
+    h.setTime(at);
+    const options = { loginEnabled: false, reauthEnabled: true };
+    const flow = await h.begin({ provider, intent: 'reauth', cookie: login.cookie, claims: { auth_time: at / 1000 }, options });
+    const saved = h.db.rows('SELECT * FROM auth_oauth_transactions')[0];
+    assert.equal(saved.account_id, owner);
+    assert.equal(saved.session_hash, originalHash);
+    assert.equal(saved.identity_id, h.db.rows('SELECT id FROM auth_identities')[0].id);
+    const authorization = new URL((await flow.response.clone().json()).url);
+    assert.equal(authorization.searchParams.get('max_age'), '0');
+    if (provider === 'kakao') assert.equal(authorization.searchParams.get('prompt'), 'login');
+    if (provider === 'naver') assert.equal(authorization.searchParams.get('auth_type'), 'reauthenticate');
+    const response = await h.callback(flow);
+    assert.equal(response.headers.get('Location'), `${ORIGIN}/?auth=reauthenticated#privacy`);
+    const renewedCookie = applyCookies(response, flow.cookie);
+    assert.equal(await h.identity(login.cookie), null);
+    assert.equal((await h.identity(renewedCookie)).userId, owner);
+    assert.equal((await resolvePrivacyIdentity(request('/', { cookie: renewedCookie }), h.options)).authenticatedAt, at);
+    assert.equal(h.db.rows('SELECT COUNT(*) AS count FROM auth_accounts')[0].count, 1);
+    assert.equal(h.db.rows('SELECT COUNT(*) AS count FROM auth_identities')[0].count, 1);
+    assert.equal(h.db.rows('SELECT * FROM game_players').length, 0);
+    assert.equal(h.db.rows('SELECT * FROM auth_sessions WHERE revoked_at IS NULL').length, 1);
+    assert.equal(h.db.rows('SELECT * FROM auth_oauth_transactions').length, 0);
+    assert.equal((await h.callback(flow)).headers.get('Location'), `${ORIGIN}/?auth_error=state_invalid`);
+  });
+});
+
+test('reauthentication rejects absent, malformed, future, pre-flow or token-inconsistent auth_time', async t => {
+  const at = CLOCK + 20 * 60000;
+  const cases = [
+    ['missing', {}], ['string', { auth_time: String(at / 1000) }], ['fraction', { auth_time: at / 1000 + 0.1 }],
+    ['negative', { auth_time: -1 }], ['future', { auth_time: at / 1000 + 1 }],
+    ['before flow', { auth_time: at / 1000 - 31 }], ['after issued at', { auth_time: at / 1000, iat: at / 1000 - 31 }],
+  ];
+  for (const [name, claims] of cases) await t.test(name, async t => {
+    const h = harness(t, { env: { HARU_REGISTRATION_OPEN: 'true' } });
+    const login = await h.login();
+    h.setTime(at);
+    const flow = await h.begin({ intent: 'reauth', cookie: login.cookie, claims, options: { reauthEnabled: true } });
+    const response = await h.callback(flow);
+    assert.equal(response.headers.get('Location'), `${ORIGIN}/?auth_error=verification_failed`);
+    assert.equal(response.headers.getSetCookie().length, 0);
+    assert.ok(await h.identity(login.cookie));
+    assert.equal(h.db.rows('SELECT * FROM auth_sessions').length, 1);
+    assert.equal(h.db.rows('SELECT * FROM auth_oauth_transactions').length, 0);
+  });
+});
+
+test('reauthentication start requires an opaque session, matching UI context and an already linked provider', async t => {
+  const h = harness(t, { env: { HARU_REGISTRATION_OPEN: 'true', HARU_SITES_TESTER_EMAIL: 'tester@example.test' }, sitesUserId: 'sites-owner', sitesEmail: 'tester@example.test' });
+  const login = await h.login();
+  const context = (await (await h.invoke('status', request('/api/auth/status', { cookie: login.cookie }))).json()).reauthentication.accountContext;
+  const options = { provider: 'google', reauthEnabled: true };
+  for (const cookie of ['', `${AUTH_COOKIES.session}=sites`, `${AUTH_COOKIES.session}=signed-out`]) {
+    assert.equal((await h.invoke('start', request('/api/auth/google/start', { method: 'POST', cookie, body: { intent: 'reauth' }, headers: { 'X-Haru-Account': context } }), options)).status, 401);
+  }
+  for (const header of [undefined, 'a'.repeat(64)]) {
+    assert.equal((await h.invoke('start', request('/api/auth/google/start', { method: 'POST', cookie: login.cookie, body: { intent: 'reauth' }, headers: header ? { 'X-Haru-Account': header } : {} }), options)).status, 409);
+  }
+  assert.equal((await h.invoke('start', request('/api/auth/naver/start', { method: 'POST', cookie: login.cookie, body: { intent: 'reauth' }, headers: { 'X-Haru-Account': context } }), { ...options, provider: 'naver' })).status, 403);
+  assert.equal(h.db.rows('SELECT * FROM auth_oauth_transactions').length, 0);
+});
+
+test('reauthentication cannot switch accounts or link a new subject even when generic signup is enabled', async t => {
+  for (const subject of ['different-existing', 'unknown-subject']) await t.test(subject, async t => {
+    const h = harness(t, { env: { HARU_REGISTRATION_OPEN: 'true' } });
+    const login = await h.login();
+    await h.login({ subject: 'different-existing' });
+    const before = h.db.rows('SELECT * FROM auth_identities');
+    const flow = await h.begin({ intent: 'reauth', cookie: login.cookie, subject, claims: { auth_time: CLOCK / 1000 }, options: { reauthEnabled: true } });
+    const response = await h.callback(flow);
+    assert.equal(response.headers.get('Location'), `${ORIGIN}/?auth_error=account_changed`);
+    assert.equal(response.headers.getSetCookie().length, 0);
+    assert.deepEqual(h.db.rows('SELECT * FROM auth_identities'), before);
+    assert.equal(h.db.rows('SELECT * FROM auth_accounts').length, 2);
+    assert.equal(h.db.rows('SELECT * FROM auth_sessions').length, 2);
+    assert.ok(await h.identity(login.cookie));
+  });
+});
+
+test('login and reauthentication gates remain separate and a disabled callback never exchanges its code', async t => {
+  const h = harness(t, { env: { HARU_REGISTRATION_OPEN: 'true' } });
+  const login = await h.login();
+  const context = (await (await h.invoke('status', request('/api/auth/status', { cookie: login.cookie }))).json()).reauthentication.accountContext;
+  const disabled = await h.invoke('start', request('/api/auth/google/start', { method: 'POST', cookie: login.cookie, body: { intent: 'reauth' }, headers: { 'X-Haru-Account': context } }), { provider: 'google' });
+  assert.equal(disabled.status, 503);
+  const loginDisabled = await h.invoke('start', request('/api/auth/google/start', { method: 'POST', body: { intent: 'login' } }), { provider: 'google', loginEnabled: false, reauthEnabled: true });
+  assert.equal(loginDisabled.status, 503);
+  const flow = await h.begin({ intent: 'reauth', cookie: login.cookie, claims: { auth_time: CLOCK / 1000 }, options: { reauthEnabled: true } });
+  const before = h.calls.length;
+  const response = await h.callback(flow, { options: { loginEnabled: true, reauthEnabled: false } });
+  assert.equal(response.headers.get('Location'), `${ORIGIN}/?auth_error=provider_disabled`);
+  assert.equal(h.calls.length, before);
+  const loginFlow = await h.begin();
+  assert.equal((await h.callback(loginFlow, { options: { loginEnabled: false, reauthEnabled: true } })).headers.get('Location'), `${ORIGIN}/?auth_error=provider_disabled`);
+  assert.equal(h.calls.length, before);
+});
+
+test('logout, withdrawal and a newer flow cancel reauthentication during provider exchange', async t => {
+  for (const invalidation of ['logout', 'withdrawal', 'new-flow']) await t.test(invalidation, async t => {
+    const h = harness(t, { env: { HARU_REGISTRATION_OPEN: 'true' } });
+    const login = await h.login();
+    const owner = (await h.identity(login.cookie)).userId;
+    const flow = await h.begin({ intent: 'reauth', cookie: login.cookie, claims: { auth_time: CLOCK / 1000 }, options: { reauthEnabled: true } });
+    h.pause = { entered: deferred(), release: deferred() };
+    const pending = h.callback(flow);
+    await h.pause.entered.promise;
+    if (invalidation === 'logout') await h.invoke('logout', request('/api/auth/logout', { method: 'POST', cookie: flow.cookie, body: {} }));
+    else if (invalidation === 'withdrawal') {
+      const { createAccountLifecycle } = await import('../server/account-lifecycle.mjs');
+      await createAccountLifecycle({ db: h.db, now: h.now }).withdraw({ actorId: owner, accountId: owner });
+    } else await h.begin({ intent: 'reauth', cookie: flow.cookie, claims: { auth_time: CLOCK / 1000 }, options: { reauthEnabled: true } });
+    h.pause.release.resolve();
+    const response = await pending;
+    assert.equal(response.headers.getSetCookie().length, 0);
+    assert.doesNotMatch(response.headers.get('Location'), /auth=reauthenticated/);
+    assert.equal(h.db.rows('SELECT * FROM auth_sessions').length, 1);
+  });
+});
+
+test('queued reauthentication rechecks token, flow and original session expiry in SQL', async t => {
+  for (const expiry of ['token', 'flow', 'session']) await t.test(expiry, async t => {
+    const h = harness(t, { env: { HARU_REGISTRATION_OPEN: 'true' } });
+    const login = await h.login();
+    const flow = await h.begin({ intent: 'reauth', cookie: login.cookie, claims: { auth_time: CLOCK / 1000 }, options: { reauthEnabled: true } });
+    h.db.beforeBatch = statements => {
+      if (!statements.some(statement => statement.sql.includes('JOIN auth_sessions previous'))) return;
+      h.db.beforeBatch = null;
+      if (expiry === 'token') h.setTime(CLOCK + 300000);
+      if (expiry === 'flow') h.db.sqlite.prepare('UPDATE auth_oauth_transactions SET expires_at = ?').run(CLOCK - 1 + 2);
+      if (expiry === 'session') h.db.sqlite.prepare('UPDATE auth_sessions SET expires_at = ?').run(CLOCK + 1);
+    };
+    const response = await h.callback(flow);
+    assert.equal(response.headers.get('Location'), `${ORIGIN}/?auth_error=account_changed`);
+    assert.equal(response.headers.getSetCookie().length, 0);
+    assert.equal(h.db.rows('SELECT * FROM auth_sessions').length, 1);
+    assert.equal(h.db.rows('SELECT * FROM auth_sessions WHERE revoked_at IS NOT NULL').length, 0);
+  });
+});
+
+test('an interrupted rotation rolls back the new session instead of retaining two live sessions', async t => {
+  const h = harness(t, { env: { HARU_REGISTRATION_OPEN: 'true' } });
+  const login = await h.login();
+  const flow = await h.begin({ intent: 'reauth', cookie: login.cookie, claims: { auth_time: CLOCK / 1000 }, options: { reauthEnabled: true } });
+  h.db.sqlite.exec(`CREATE TRIGGER prevent_old_session_revocation BEFORE UPDATE OF revoked_at ON auth_sessions
+    WHEN NEW.revoked_at IS NOT NULL BEGIN SELECT RAISE(IGNORE); END`);
+  const response = await h.callback(flow);
+  assert.equal(response.headers.get('Location'), `${ORIGIN}/?auth_error=service_unavailable`);
+  assert.equal(response.headers.getSetCookie().length, 0);
+  assert.equal(h.db.rows('SELECT * FROM auth_sessions').length, 1);
+  assert.ok(await h.identity(login.cookie));
+});
+
+test('a late reauthentication cookie cannot restore a session after browser logout', async t => {
+  const h = harness(t, { env: { HARU_REGISTRATION_OPEN: 'true' } });
+  const login = await h.login();
+  const flow = await h.begin({ intent: 'reauth', cookie: login.cookie, claims: { auth_time: CLOCK / 1000 }, options: { reauthEnabled: true } });
+  const delayed = await h.callback(flow);
+  assert.equal(delayed.headers.get('Location'), `${ORIGIN}/?auth=reauthenticated#privacy`);
+  await h.invoke('logout', request('/api/auth/logout', { method: 'POST', cookie: flow.cookie, body: {} }));
+  assert.equal(await h.identity(applyCookies(delayed, flow.cookie)), null);
+  assert.equal(h.db.rows('SELECT * FROM auth_sessions WHERE revoked_at IS NULL').length, 0);
+});
+
+
+test('real auth client accepts each server reauthentication status and authorize URL contract', async t => {
+  for (const provider of ['google', 'kakao', 'naver']) await t.test(provider, async t => {
+    const h = harness(t, { env: { HARU_REGISTRATION_OPEN: 'true' } });
+    const login = await h.login({ provider });
+    const owner = (await h.identity(login.cookie)).userId;
+    await createGameService({ db: h.db, now: h.now }).bootstrap(owner);
+    const originalPlayers = h.db.rows('SELECT * FROM game_players');
+    let cookie = login.cookie;
+    const calls = [];
+    const api = createAuthApi({ fetcher: async (path, init) => {
+      calls.push({ path, init });
+      const headers = new Headers(init.headers);
+      headers.set('Cookie', cookie);
+      if (init.method === 'POST') headers.set('Origin', ORIGIN);
+      const req = new Request(`${ORIGIN}${path}`, { ...init, headers });
+      const route = path.slice('/api/auth/'.length).split('/');
+      const response = await handleAuthRequest(req, { ...h.options, loginEnabled: false, reauthEnabled: true,
+        action: route[1] || route[0], provider: route[1] ? route[0] : undefined });
+      cookie = applyCookies(response, cookie);
+      return response;
+    } });
+    t.after(() => api.destroy());
+    const status = await api.status();
+    assert.equal(status.reauthentication.enabled, true);
+    assert.equal(status.reauthentication.playerId, originalPlayers[0].public_id);
+    const destination = new URL(await api.start(provider, 'reauth', status.reauthentication.accountContext));
+    assert.equal(destination.origin + destination.pathname, ENDPOINTS[provider].authorize);
+    assert.equal(destination.searchParams.get('max_age'), '0');
+    assert.equal(new Headers(calls[1].init.headers).get('X-Haru-Account'), status.reauthentication.accountContext);
+    assert.deepEqual(JSON.parse(calls[1].init.body), { intent: 'reauth' });
+    assert.deepEqual(h.db.rows('SELECT * FROM game_players'), originalPlayers);
+    assert.equal(h.db.rows('SELECT * FROM auth_oauth_transactions')[0].intent, 'reauth');
+  });
+});
+
+test('logout after callback authentication but before the atomic rotation prevents a replacement session', async t => {
+  const h = harness(t, { env: { HARU_REGISTRATION_OPEN: 'true' } });
+  const login = await h.login();
+  const flow = await h.begin({ intent: 'reauth', cookie: login.cookie, claims: { auth_time: CLOCK / 1000 }, options: { reauthEnabled: true } });
+  h.db.beforeBatch = async statements => {
+    if (!statements.some(statement => statement.sql.includes('JOIN auth_sessions previous'))) return;
+    h.db.beforeBatch = null;
+    await h.invoke('logout', request('/api/auth/logout', { method: 'POST', cookie: flow.cookie, body: {} }));
+  };
+  const response = await h.callback(flow);
+  assert.equal(response.headers.get('Location'), `${ORIGIN}/?auth_error=account_changed`);
+  assert.equal(response.headers.getSetCookie().length, 0);
+  assert.equal(h.db.rows('SELECT * FROM auth_sessions WHERE revoked_at IS NULL').length, 0);
+  assert.equal(h.db.rows('SELECT * FROM auth_sessions').length, 1);
 });

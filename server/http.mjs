@@ -165,7 +165,7 @@ export async function handleHealthRequest(db) {
       'auth_accounts', 'auth_identities', 'auth_sessions', 'auth_oauth_transactions', 'auth_rate_limits',
       'privacy_account_controls', 'privacy_deletion_jobs', 'guardian_requests', 'guardian_consents', 'guardian_links')`).first();
     if (row?.count !== 18) throw new Error('schema_unavailable');
-    await db.prepare(`SELECT t.claim_token, s.binding_hash FROM auth_oauth_transactions t
+    await db.prepare(`SELECT t.claim_token, t.session_hash, t.identity_id, s.binding_hash, s.authenticated_at FROM auth_oauth_transactions t
       LEFT JOIN auth_sessions s ON s.binding_hash = t.binding_hash LIMIT 0`).all();
     return json({ status: 'ok', version: GAME_VERSION, database: 'ready' });
   } catch {

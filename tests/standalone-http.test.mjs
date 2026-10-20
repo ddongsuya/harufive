@@ -98,3 +98,27 @@ test('standalone session lookup remains after complete answer-body receipt', asy
   assert.equal((await pending).status, 409);
   assert.equal(queries, 1);
 });
+
+
+test('standalone keeps reauthentication closed even for an existing linked account and configured provider', async t => {
+  const f = fixture(t), headers = f.session('owner');
+  f.env.HARU_GOOGLE_CLIENT_ID = 'test-client';
+  f.env.HARU_GOOGLE_CLIENT_SECRET = 'test-secret';
+  f.env.HARU_REAUTH_ENABLED = 'true';
+  f.db.sqlite.prepare(`INSERT INTO auth_identities
+    (id, account_id, provider, issuer, audience, subject, linked_at)
+    VALUES ('fixture-identity', 'owner', 'google', 'https://accounts.google.com', 'test-client', 'fixture-subject', ?)`).run(NOW);
+  await f.call('/api/game/bootstrap', { headers });
+  const status = await (await f.call('/api/auth/status', { headers })).json();
+  assert.equal(status.reauthentication.enabled, false);
+  assert.ok(status.reauthentication.providers.every(provider => provider.enabled === false));
+  assert.equal(status.registration.open, false);
+  const response = await f.call('/api/auth/google/start', { method: 'POST',
+    headers: { ...headers, 'X-Haru-Account': status.reauthentication.accountContext },
+    body: { intent: 'reauth' },
+  });
+  assert.equal(response.status, 503);
+  assert.equal(response.headers.getSetCookie().length, 0);
+  assert.equal(f.db.rows('SELECT * FROM auth_oauth_transactions').length, 0);
+  assert.equal(f.db.rows('SELECT authenticated_at FROM auth_sessions')[0].authenticated_at, null);
+});

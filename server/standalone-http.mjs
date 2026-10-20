@@ -38,7 +38,7 @@ export async function handleStandaloneRequest(request, { db, env = {}, now = Dat
     const [first, second] = auth[1].split('/');
     return handleAuthRequest(request, {
       action: second || first, provider: second ? first : undefined,
-      db, env: settings, now, fetch, sitesEnabled: false, loginEnabled: false,
+      db, env: settings, now, fetch, sitesEnabled: false, loginEnabled: false, reauthEnabled: false,
     });
   }
   const privacy = /^\/api\/(privacy|guardian)\/([a-z]+)$/.exec(url.pathname);

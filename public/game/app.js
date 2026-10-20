@@ -21,6 +21,7 @@ const api=createGameApi();
 const authApi=createAuthApi();
 let privacyApi=createPrivacyApi(),privacyEpoch=0,privacyConfirmation=null,privacyModal=false;
 let privacy={loading:false,busy:false,status:null,children:[],hasMore:false,selected:null,error:'',notice:'',uncertain:false};
+let reauthAttempt=null;
 let authStatus=null,authError='',authBusy=false,authPromise=null,logoutUnconfirmed=false,authNotice=callbackNotice(location.search||'');
 if(location.href&&location.search){
   const clean=new URL(location.href);
@@ -255,6 +256,7 @@ function linkLoginDialog(provider){
   showModal(`${escape(providerName(provider))} 로그인을 연결할까요?`,'로그인 수단을 추가하면 같은 캐릭터와 기록으로 이어서 이용할 수 있어요.',`<button class="btn ghost" data-action="close-modal">취소</button><button class="btn" data-action="auth-link-confirm" data-provider="${escape(provider)}">로그인하고 연결하기</button>`,`<div class="modal-note">이미 다른 하루다섯 계정에 연결된 로그인은 여기로 옮기거나 기록을 합칠 수 없어요.${state.active?'<br>진행 중인 도전의 풀이 시간은 로그인하는 동안에도 계속돼요.':''}</div>`);
 }
 async function signOut(){
+  if(reauthAttempt)resetPrivacy();
   if(authBusy||pending||transaction||syncing||disposed)return;
   authBusy=true;logoutUnconfirmed=true;authError='';authNotice=null;
   clearPersonalState();render();setRequestControls();
@@ -444,6 +446,7 @@ function accountCard(){
   }).join('')}</div><p class="account-caption">다른 계정에 연결된 로그인은 자동으로 합쳐지지 않아요. 사용하던 계정에서 연결해 주세요.</p><div class="account-login-actions">${authError?'<button class="text-link" data-action="auth-refresh">연결 다시 확인</button>':''}<button class="text-link" data-action="release-info">로그인 · 출시 준비 안내</button>${supportContact()}</div><div class="privacy-account-links"><button class="btn secondary" data-action="privacy-open">${icon('shield',true)} 나의 정보 관리</button><button class="text-link" data-action="guardian-open">보호자 동의 안내</button></div><div class="account-data-download"><button class="btn secondary" data-action="export-server">${icon('book',true)} 내 서비스 기록 다운로드</button><p class="account-caption">서비스 기록 파일에는 나의 게임 정보가 담겨 있어요. 다운로드한 파일은 안전하게 보관해 주세요.</p></div>${legacyRecord?`<div class="legacy-record"><strong>이 브라우저의 이전 테스트 기록</strong><p>${escape(legacyRecord.name)} · 공식 도전 ${fmt(legacyRecord.dailyCount)}일 · ${fmt(legacyRecord.coins)} 테스트 코인 · 친구 ${fmt(legacyRecord.friends)}종</p><p>이전 파일을 그대로 보관하고 있어요. 계정의 점수·코인과 합산하지 않아요.</p><button class="text-link" data-action="export-legacy">이전 테스트 기록 JSON 받기 ${icon('arrow',true)}</button></div>`:''}</section>`;
 }
 function resetPrivacy(){
+  if(reauthAttempt){reauthAttempt=null;authApi.cancelPending();authBusy=false;}
   privacyApi.destroy();privacyApi=createPrivacyApi();privacyEpoch++;
   privacy={loading:false,busy:false,status:null,children:[],hasMore:false,selected:null,error:'',notice:'',uncertain:false};
   privacyConfirmation=null;
@@ -540,8 +543,38 @@ async function commitPrivacy(operation){
   }catch(error){if(privacyCurrent(proof.epoch,proof.owner))privacyFailure(error,{uncertain:error.status===0||error.status>=500||['PRIVACY_TIMEOUT','PRIVACY_NETWORK_ERROR','INVALID_PRIVACY_RESPONSE'].includes(error.code)});}
   finally{if(privacyCurrent(proof.epoch,proof.owner)){privacy.busy=false;render();}else if(!disposed&&ui.view==='privacy')render();}
 }
+async function beginReauthentication(provider){
+  if(disposed||!state||ui.view!=='privacy'||authBusy||privacy.busy||pending||transaction||syncing||logoutUnconfirmed)return;
+  const available=authStatus?.reauthentication;
+  if(!available?.enabled||available.playerId!==state.playerId||!available.providers.some(item=>item.id===provider&&item.enabled))return;
+  const context=available.accountContext,owner=state.playerId;
+  resetPrivacy();
+  const attempt={epoch:privacyEpoch,owner,context};reauthAttempt=attempt;
+  authBusy=true;authError='';authNotice=null;privacy.notice='본인 확인 연결을 준비하고 있어요…';render();setRequestControls();
+  try{
+    const fresh=await authApi.status();
+    if(reauthAttempt!==attempt||document.hidden||!privacyCurrent(attempt.epoch,owner))return;
+    if(!fresh.authenticated||fresh.reauthentication.playerId!==owner||fresh.reauthentication.accountContext!==context)
+      throw Object.assign(new Error('계정이 바뀌었어요. 현재 계정을 다시 확인해 주세요.'),{code:'ACCOUNT_CHANGED'});
+    authStatus=fresh;
+    const url=await authApi.start(provider,'reauth',context);
+    if(reauthAttempt!==attempt||document.hidden||!privacyCurrent(attempt.epoch,owner)||
+      authStatus?.reauthentication?.accountContext!==context||authStatus?.reauthentication?.playerId!==owner)return;
+    privacyModal=true;
+    showModal(`${escape(providerName(provider))} 본인 확인으로 이동해요.`,
+      '현재 게임 계정에 연결된 로그인으로 다시 확인해 주세요. 다른 계정으로 바꾸거나 새 계정을 만들지 않아요.',
+      `<a class="btn full" data-auth-continue href="${escape(url)}" target="_top">본인 확인 화면 열기 ${icon('arrow',true)}</a>`,
+      '<p class="account-caption">확인을 마치면 정보 관리 화면으로 돌아와 권한을 다시 확인해요.</p>');
+    modal.querySelector('[data-auth-continue]')?.click();
+  }catch(error){
+    if(reauthAttempt===attempt&&privacyCurrent(attempt.epoch,owner)){privacy.error=error.message||'본인 확인을 시작하지 못했어요.';privacy.notice='';}
+  }finally{
+    if(reauthAttempt===attempt){reauthAttempt=null;authBusy=false;privacy.notice='';if(!disposed){render();setRequestControls();}}
+  }
+}
 function privacySurface(){
-  return privacyPage({signedIn:!!state&&authStatus?.authenticated!==false,...privacy});
+  const reauthentication=state&&authStatus?.reauthentication?.playerId===state.playerId?authStatus.reauthentication:null;
+  return privacyPage({signedIn:!!state&&authStatus?.authenticated!==false,...privacy,busy:privacy.busy||authBusy,reauthentication});
 }
 function publicPrivacyShell(content){
   return `<main id="main" class="privacy-public" tabindex="-1"><div class="privacy-public-brand">${brand()}</div>${content}</main>`;
@@ -659,6 +692,7 @@ function renameDialog(){showModal('어떤 이름으로 불러드릴까요?','한
 async function handleAction(event){
   const button=event.target.closest('[data-action]');if(!button||button.disabled)return;const a=button.dataset.action;
   if(a==='auth-sites'){event.preventDefault?.();await beginLogin('chatgpt');return;}
+  if(a==='auth-reauth'){await beginReauthentication(button.dataset.provider);return;}
   if(a==='auth-login'){await beginLogin(button.dataset.provider);return;}
   if(a==='auth-logout'){await signOut();return;}
   if(a==='auth-refresh'){await syncAuth();return;}

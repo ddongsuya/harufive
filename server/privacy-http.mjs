@@ -88,8 +88,10 @@ export async function handlePrivacyRequest(request, { namespace, action, db, env
     const body = method === 'POST' ? await readBody(request, definition[action]) : {};
     const identity = await resolvePrivacyIdentity(request, { db, env, now });
     if (!identity) fail(401, 'SIGN_IN_REQUIRED', '로그인 상태를 다시 확인해 주세요.');
-    const age = Math.floor(now()) - identity.authenticatedAt;
-    if (!Number.isSafeInteger(age) || age < 0 || age >= PRIVACY_LIMITS.freshSessionMs) {
+    const authenticatedAt = identity.authenticatedAt;
+    const age = Math.floor(now()) - authenticatedAt;
+    if (!Number.isSafeInteger(authenticatedAt) || authenticatedAt < 0 ||
+        !Number.isSafeInteger(age) || age < 0 || age >= PRIVACY_LIMITS.freshSessionMs) {
       fail(401, 'REAUTH_REQUIRED', '정보 관리를 위해 다시 로그인해 주세요.');
     }
     // Status establishes the current context. Every subsequent rights read or

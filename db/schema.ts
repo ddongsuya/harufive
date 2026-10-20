@@ -133,6 +133,8 @@ export const authIdentities = sqliteTable('auth_identities', {
 export const authSessions = sqliteTable('auth_sessions', {
   tokenHash: text('token_hash').primaryKey(),
   bindingHash: text('binding_hash'),
+  // Provider-signed authentication time; never backfill from session issuance.
+  authenticatedAt: integer('authenticated_at'),
   accountId: text('account_id').notNull().references(() => authAccounts.id, { onDelete: 'cascade' }),
   provider: text('provider').notNull(),
   createdAt: integer('created_at').notNull(),
@@ -144,6 +146,7 @@ export const authSessions = sqliteTable('auth_sessions', {
   index('auth_sessions_binding_index').on(table.bindingHash),
   check('auth_sessions_provider_valid', sql`${table.provider} IN ('kakao', 'google', 'naver')`),
   check('auth_sessions_expiry_valid', sql`${table.expiresAt} > ${table.createdAt}`),
+  check('auth_sessions_authenticated_at_valid', sql`${table.authenticatedAt} IS NULL OR (typeof(${table.authenticatedAt}) = 'integer' AND ${table.authenticatedAt} >= 0 AND ${table.authenticatedAt} <= ${table.createdAt})`),
 ]);
 
 export const authOAuthTransactions = sqliteTable('auth_oauth_transactions', {
@@ -153,6 +156,9 @@ export const authOAuthTransactions = sqliteTable('auth_oauth_transactions', {
   audience: text('audience').notNull(),
   intent: text('intent').notNull(),
   accountId: text('account_id').references(() => authAccounts.id, { onDelete: 'cascade' }),
+  // Reauthentication is pinned to one existing session and linked identity.
+  sessionHash: text('session_hash'),
+  identityId: text('identity_id'),
   contextHash: text('context_hash').notNull(),
   nonceHash: text('nonce_hash').notNull(),
   codeVerifier: text('code_verifier').notNull(),
@@ -162,8 +168,9 @@ export const authOAuthTransactions = sqliteTable('auth_oauth_transactions', {
 }, table => [
   index('auth_oauth_transactions_expiry_index').on(table.expiresAt),
   check('auth_oauth_transactions_provider_valid', sql`${table.provider} IN ('kakao', 'google', 'naver')`),
-  check('auth_oauth_transactions_intent_valid', sql`${table.intent} IN ('login', 'link')`),
+  check('auth_oauth_transactions_intent_valid', sql`${table.intent} IN ('login', 'link', 'reauth')`),
   check('auth_oauth_transactions_link_account_valid', sql`${table.intent} != 'link' OR ${table.accountId} IS NOT NULL`),
+  check('auth_oauth_transactions_reauth_valid', sql`${table.intent} != 'reauth' OR (${table.accountId} IS NOT NULL AND ${table.sessionHash} IS NOT NULL AND length(${table.sessionHash}) = 64 AND ${table.identityId} IS NOT NULL)`),
   check('auth_oauth_transactions_expiry_valid', sql`${table.expiresAt} > ${table.createdAt}`),
 ]);
 

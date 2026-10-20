@@ -58,7 +58,8 @@ const MESSAGES = Object.freeze({
   JSON_REQUIRED: '요청 형식이 올바르지 않아요.',
   INVALID_REQUEST: '로그인 요청을 확인할 수 없어요. 다시 시작해 주세요.',
   BODY_TOO_LARGE: '로그인 요청이 너무 커요. 다시 시작해 주세요.',
-  SIGN_IN_REQUIRED: '먼저 로그인한 뒤 계정을 연결해 주세요.',
+  SIGN_IN_REQUIRED: '먼저 로그인한 뒤 다시 시도해 주세요.',
+  ACCOUNT_CHANGED: '계정 정보 화면을 다시 열고 시도해 주세요.',
   RATE_LIMITED: '로그인 요청이 잠시 몰렸어요. 잠시 후 다시 시도해 주세요.',
   SERVICE_UNAVAILABLE: '로그인 서비스에 연결하지 못했어요. 잠시 후 다시 시도해 주세요.',
 });
@@ -170,6 +171,7 @@ function redirect(origin, outcome, isError = false, cookies = []) {
   const headers = responseHeaders();
   const url = new URL('/', origin);
   url.searchParams.set(isError ? 'auth_error' : 'auth', isError && !CALLBACK_CODES.has(outcome) ? 'service_unavailable' : outcome);
+  if (!isError && outcome === 'reauthenticated') url.hash = 'privacy';
   headers.set('Location', url.href);
   for (const value of cookies) headers.append('Set-Cookie', value);
   return new Response(null, { status: 303, headers });
@@ -204,12 +206,12 @@ async function resolveInternal(request, { db, env, sitesUserId, sitesEmail, now 
   if (current.value !== 'sites') {
     if (!TOKEN.test(current.value || '')) return null;
     const tokenHash = await digest(current.value);
-    const row = await db.prepare(`SELECT s.account_id, s.provider, s.created_at FROM auth_sessions s
+    const row = await db.prepare(`SELECT s.account_id, s.provider, s.created_at, s.authenticated_at FROM auth_sessions s
       JOIN auth_accounts a ON a.id = s.account_id
       WHERE s.token_hash = ? AND s.revoked_at IS NULL AND s.expires_at > ? AND a.disabled_at IS NULL AND ${accountAllowedSql('a.id')}`)
       .bind(tokenHash, timestamp(now)).first();
     if (!row) return null;
-    return { userId: row.account_id, provider: row.provider, linkedProviders: await linkedProviders(db, row.account_id), sessionHash: tokenHash, sessionCreatedAt: row.created_at };
+    return { userId: row.account_id, provider: row.provider, linkedProviders: await linkedProviders(db, row.account_id), sessionHash: tokenHash, sessionCreatedAt: row.created_at, authenticatedAt: row.authenticated_at };
   }
   const userId = sitesIdentity(sitesUserId);
   if (!userId) return null;
@@ -401,9 +403,23 @@ async function verifyIdToken(token, provider, flow, options) {
       (Array.isArray(payload.aud) && payload.aud.length > 1 && payload.azp !== provider.clientId)) {
       throw new Error('invalid_claims');
     }
-    // Only the verified provider/issuer/client/subject tuple survives this call.
-    // Email (even email_verified), display name and age claims are not identities.
-    return { provider: provider.id, issuer: provider.issuer, audience: provider.clientId, subject: payload.sub };
+    // iat is token issuance, not evidence of an interactive authentication.
+    // Missing auth_time never falls back to iat, session issuance or this clock.
+    let authenticatedAt = null;
+    if (payload.auth_time !== undefined) {
+      const seconds = payload.auth_time;
+      if (!Number.isSafeInteger(payload.iat) || !Number.isSafeInteger(payload.exp) ||
+          !Number.isSafeInteger(seconds) || seconds < 0 || !Number.isSafeInteger(seconds * 1000) ||
+          seconds * 1000 > timestamp(options.now) || seconds > payload.iat + 30) throw new Error('invalid_auth_time');
+      authenticatedAt = seconds * 1000;
+    }
+    if (flow.intent === 'reauth' && (authenticatedAt === null ||
+        authenticatedAt < Math.floor(flow.created_at / 1000) * 1000 - 30000)) throw new Error('reauthentication_missing');
+    // Retain only the verified identity tuple and minimal signed time evidence.
+    // Email, display name and age claims are never account identities.
+    return { provider: provider.id, issuer: provider.issuer, audience: provider.clientId,
+      subject: payload.sub, authenticatedAt, tokenExpiresAt: payload.exp * 1000 };
+
   } catch (error) {
     if (error instanceof AuthError) throw error;
     throw new AuthError(400, 'INVALID_REQUEST', 'verification_failed');
@@ -426,10 +442,24 @@ async function exchangeCode(provider, code, state, flow, options) {
 async function start(request, provider, options) {
   if (!provider?.enabled) throw new AuthError(503, 'AUTH_NOT_CONFIGURED', 'provider_disabled');
   const body = await readJson(request, ['intent']);
-  if (body.intent !== 'login' && body.intent !== 'link') throw new AuthError(400, 'INVALID_REQUEST', 'invalid_request');
+  if (!['login', 'link', 'reauth'].includes(body.intent)) throw new AuthError(400, 'INVALID_REQUEST', 'invalid_request');
+  if (!(body.intent === 'reauth' ? options.reauthEnabled : options.loginEnabled)) {
+    throw new AuthError(503, 'AUTH_NOT_CONFIGURED', 'provider_disabled');
+  }
   const { db, now, sitesUserId } = options;
   const account = await resolveInternal(request, options);
   if (body.intent === 'link' && !account) throw new AuthError(401, 'SIGN_IN_REQUIRED', 'account_changed');
+  let reauthIdentity = null;
+  if (body.intent === 'reauth') {
+    if (!account?.sessionHash) throw new AuthError(401, 'SIGN_IN_REQUIRED', 'account_changed');
+    if (request.headers.get('X-Haru-Account') !== await digest(`privacy:${account.sessionHash}`)) {
+      throw new AuthError(409, 'ACCOUNT_CHANGED', 'account_changed');
+    }
+    reauthIdentity = await db.prepare(`SELECT id FROM auth_identities
+      WHERE account_id = ? AND provider = ? AND issuer = ? AND audience = ?`)
+      .bind(account.userId, provider.id, provider.issuer, provider.clientId).first();
+    if (!reauthIdentity) throw new AuthError(403, 'INVALID_REQUEST', 'account_conflict');
+  }
   await rateLimit(db, 'start', provider.id, now);
   const at = timestamp(now);
   await cleanup(db, at);
@@ -453,19 +483,23 @@ async function start(request, provider, options) {
         AND token_hash != ?`).bind(at, oldHash, account?.sessionHash || ''),
     ]);
   }
-  const linkGate = body.intent === 'link'
+  const linkGate = body.intent !== 'login'
     ? `AND EXISTS (SELECT 1 FROM auth_accounts a WHERE a.id = ? AND ${accountAllowedSql('a.id')})
       ${account.sessionHash ? 'AND EXISTS (SELECT 1 FROM auth_sessions s WHERE s.token_hash = ? AND s.account_id = ? AND s.revoked_at IS NULL AND s.expires_at > ?)' : ''}` : '';
-  const linkValues = body.intent === 'link' ? [account.userId,
+  const linkValues = body.intent !== 'login' ? [account.userId,
     ...(account.sessionHash ? [account.sessionHash, account.userId, at] : [])] : [];
   const inserted = await db.prepare(`INSERT INTO auth_oauth_transactions
-    (state_hash, binding_hash, provider, audience, intent, account_id, context_hash, nonce_hash, code_verifier, created_at, expires_at)
-    SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+    (state_hash, binding_hash, provider, audience, intent, account_id, session_hash, identity_id, context_hash, nonce_hash, code_verifier, created_at, expires_at)
+    SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
     WHERE (SELECT COUNT(*) FROM auth_oauth_transactions) < ? ${linkGate}
+      ${reauthIdentity ? `AND EXISTS (SELECT 1 FROM auth_identities WHERE id = ? AND account_id = ? AND provider = ? AND issuer = ? AND audience = ?)
+        AND EXISTS (SELECT 1 FROM auth_sessions WHERE token_hash = ? AND account_id = ? AND revoked_at IS NULL
+          AND CAST(created_at / 1000 AS INTEGER) <= unixepoch('now') AND CAST(expires_at / 1000 AS INTEGER) > unixepoch('now'))` : ''}
     RETURNING state_hash`).bind(
       await digest(state), await digest(binding), provider.id, provider.clientId, body.intent,
-      body.intent === 'link' ? account.userId : null, await contextHash(request, sitesUserId),
-      await digest(nonce), verifier, at, at + AUTH_LIMITS.flowMs, AUTH_LIMITS.liveFlows, ...linkValues,
+      body.intent !== 'login' ? account.userId : null, reauthIdentity ? account.sessionHash : null, reauthIdentity?.id ?? null,
+      await contextHash(request, sitesUserId), await digest(nonce), verifier, at, at + AUTH_LIMITS.flowMs, AUTH_LIMITS.liveFlows, ...linkValues,
+      ...(reauthIdentity ? [reauthIdentity.id, account.userId, provider.id, provider.issuer, provider.clientId, account.sessionHash, account.userId] : []),
     ).first();
   if (!inserted) throw new AuthError(429, 'RATE_LIMITED', 'too_many_requests', 60);
   const url = new URL(provider.authorize);
@@ -473,7 +507,13 @@ async function start(request, provider, options) {
     response_type: 'code', client_id: provider.clientId, redirect_uri: provider.redirectUri,
     scope: provider.scope, state, nonce, code_challenge: await challenge(verifier), code_challenge_method: 'S256',
   })) url.searchParams.set(key, value);
-  if (provider.id === 'google') url.searchParams.set('prompt', 'select_account');
+  if (body.intent === 'reauth') {
+    // Preparation only: providers must supply signed auth_time. Unsupported
+    // parameters or silent SSO cannot be accepted as successful reauthentication.
+    url.searchParams.set('max_age', '0');
+    if (provider.id === 'kakao') url.searchParams.set('prompt', 'login');
+    if (provider.id === 'naver') url.searchParams.set('auth_type', 'reauthenticate');
+  } else if (provider.id === 'google') url.searchParams.set('prompt', 'select_account');
   // Authorization state/verifier live for 10 minutes in D1. The opaque browser
   // binding remains for a session lifetime so a late HTTP response cannot undo
   // logout: logout can revoke even an issued session not yet seen by the client.
@@ -543,15 +583,67 @@ async function createSession(identity, flow, options) {
     WHERE i.provider = ? AND i.issuer = ? AND i.audience = ? AND i.subject = ?
     ORDER BY s.created_at DESC, s.token_hash DESC LIMIT -1 OFFSET ?) AND ${liveFlow}`)
     .bind(...tuple, AUTH_LIMITS.sessionsPerAccount - 1, ...proof));
-  statements.push(db.prepare(`INSERT INTO auth_sessions (token_hash, binding_hash, account_id, provider, created_at, expires_at)
-    SELECT ?, ?, i.account_id, ?, ?, ? FROM auth_identities i JOIN auth_accounts a ON a.id = i.account_id
+  statements.push(db.prepare(`INSERT INTO auth_sessions (token_hash, binding_hash, account_id, provider, created_at, expires_at, authenticated_at)
+    SELECT ?, ?, i.account_id, ?, ?, ?, ? FROM auth_identities i JOIN auth_accounts a ON a.id = i.account_id
     WHERE i.provider = ? AND i.issuer = ? AND i.audience = ? AND i.subject = ? AND a.disabled_at IS NULL AND ${accountAllowedSql('a.id')} AND ${liveFlow}`)
-    .bind(tokenHash, flow.binding_hash, identity.provider, at, at + AUTH_LIMITS.sessionMs, ...tuple, ...proof));
+    .bind(tokenHash, flow.binding_hash, identity.provider, at, at + AUTH_LIMITS.sessionMs, identity.authenticatedAt, ...tuple, ...proof));
   statements.push(db.prepare(`DELETE FROM auth_oauth_transactions WHERE state_hash = ? AND claim_token = ? AND expires_at > ? RETURNING state_hash`).bind(...proof));
   const committed = await db.batch(statements);
   if (!committed.at(-1).results.length) throw new AuthError(401, 'SIGN_IN_REQUIRED', 'account_changed');
   const session = await db.prepare('SELECT account_id FROM auth_sessions WHERE token_hash = ?').bind(tokenHash).first();
   if (!session) throw new AuthError(403, 'SIGN_IN_REQUIRED', 'account_unavailable');
+  return cookie(AUTH_COOKIES.session, rawToken, AUTH_LIMITS.sessionMs / 1000);
+}
+
+// Rotate only the existing session pinned at start. This path never calls
+// createSession/linkIdentity and cannot create accounts, identities or players.
+async function reauthenticate(request, identity, flow, options) {
+  const { db, now } = options;
+  const account = await resolveInternal(request, options);
+  if (!account?.sessionHash || account.userId !== flow.account_id || account.sessionHash !== flow.session_hash ||
+      await contextHash(request, options.sitesUserId) !== flow.context_hash) {
+    throw new AuthError(401, 'SIGN_IN_REQUIRED', 'account_changed');
+  }
+  const at = timestamp(now);
+  const rawToken = randomToken();
+  const tokenHash = await digest(rawToken);
+  const inserted = `EXISTS (SELECT 1 FROM auth_sessions WHERE token_hash = ? AND account_id = ?)`;
+  const result = await db.batch([
+    // The first conditional write is the authorization point. Later statements
+    // complete that same operation rather than rechecking clocks halfway through.
+    db.prepare(`INSERT INTO auth_sessions
+      (token_hash, binding_hash, account_id, provider, created_at, expires_at, authenticated_at)
+      SELECT ?, f.binding_hash, f.account_id, f.provider, ?, ?, ? FROM auth_oauth_transactions f
+      JOIN auth_sessions previous ON previous.token_hash = f.session_hash AND previous.account_id = f.account_id
+      JOIN auth_identities i ON i.id = f.identity_id AND i.account_id = f.account_id
+      JOIN auth_accounts a ON a.id = f.account_id
+      WHERE f.state_hash = ? AND f.claim_token = ? AND f.intent = 'reauth'
+        AND f.session_hash = ? AND f.account_id = ? AND f.identity_id = ?
+        AND f.provider = ? AND f.audience = ? AND i.provider = ? AND i.issuer = ? AND i.audience = ? AND i.subject = ?
+        AND previous.revoked_at IS NULL AND a.disabled_at IS NULL AND ${accountAllowedSql('a.id')}
+        AND CAST(previous.created_at / 1000 AS INTEGER) <= unixepoch('now')
+        AND CAST(previous.expires_at / 1000 AS INTEGER) > unixepoch('now')
+        AND CAST(f.expires_at / 1000 AS INTEGER) > unixepoch('now')
+        AND CAST(? / 1000 AS INTEGER) > unixepoch('now')
+        AND CAST(? / 1000 AS INTEGER) <= unixepoch('now')
+        AND CAST((? + 900000) / 1000 AS INTEGER) > unixepoch('now')
+        AND ? >= (CAST(f.created_at / 1000 AS INTEGER) - 30) * 1000
+      RETURNING token_hash`).bind(tokenHash, at, at + AUTH_LIMITS.sessionMs, identity.authenticatedAt,
+        flow.state_hash, flow.claim_token, flow.session_hash, flow.account_id, flow.identity_id,
+        identity.provider, identity.audience, ...identityParameters(identity), identity.tokenExpiresAt,
+        identity.authenticatedAt, identity.authenticatedAt, identity.authenticatedAt),
+    db.prepare(`UPDATE auth_sessions SET revoked_at = ? WHERE token_hash = ? AND account_id = ?
+      AND revoked_at IS NULL AND ${inserted}`).bind(at, flow.session_hash, flow.account_id, tokenHash, flow.account_id),
+    db.prepare(`DELETE FROM auth_oauth_transactions WHERE state_hash = ? AND claim_token = ?
+      AND ${inserted}`).bind(flow.state_hash, flow.claim_token, tokenHash, flow.account_id),
+    // Fail the entire transaction if only part of the rotation took effect.
+    db.prepare(`SELECT CASE WHEN NOT ${inserted} OR (
+      EXISTS (SELECT 1 FROM auth_sessions WHERE token_hash = ? AND account_id = ? AND revoked_at IS NOT NULL)
+      AND NOT EXISTS (SELECT 1 FROM auth_oauth_transactions WHERE state_hash = ? AND claim_token = ?))
+      THEN 1 ELSE json('') END AS complete`).bind(tokenHash, flow.account_id, flow.session_hash,
+        flow.account_id, flow.state_hash, flow.claim_token),
+  ]);
+  if (!result[0].results.length) throw new AuthError(401, 'SIGN_IN_REQUIRED', 'account_changed');
   return cookie(AUTH_COOKIES.session, rawToken, AUTH_LIMITS.sessionMs / 1000);
 }
 
@@ -577,6 +669,9 @@ async function callback(request, provider, options) {
         await contextHash(request, options.sitesUserId), at).first();
     if (!flow) throw new AuthError(400, 'INVALID_REQUEST', 'state_invalid');
     claimedFlow = flow;
+    if (!(flow.intent === 'reauth' ? options.reauthEnabled : options.loginEnabled)) {
+      throw new AuthError(503, 'AUTH_NOT_CONFIGURED', 'provider_disabled');
+    }
     if (url.searchParams.has('error')) throw new AuthError(400, 'INVALID_REQUEST', 'provider_denied');
     const authorizationIssuer = url.searchParams.get('iss');
     if (authorizationIssuer && !provider.issuers.includes(authorizationIssuer)) throw new AuthError(400, 'INVALID_REQUEST', 'verification_failed');
@@ -593,6 +688,10 @@ async function callback(request, provider, options) {
     if (flow.intent === 'link') {
       await linkIdentity(request, identity, flow, options);
       return redirect(origin, 'linked', false, cookies);
+    }
+    if (flow.intent === 'reauth') {
+      cookies.push(await reauthenticate(request, identity, flow, options));
+      return redirect(origin, 'reauthenticated', false, cookies);
     }
     cookies.push(await createSession(identity, flow, options));
     return redirect(origin, 'success', false, cookies);
@@ -631,12 +730,12 @@ async function endSession(request, options, resumeSites) {
  * required only for start/callback. fetch/clock/timeout injections are trusted
  * server-side dependencies used by SQL + signed-JWT integration tests.
  * @param {Request} request
- * @param {{action?: string, provider?: string, db?: import('@cloudflare/workers-types').D1Database, env?: any, sitesUserId?: string, sitesEmail?: string, now?: () => number, fetch?: typeof globalThis.fetch, timeoutMs?: number, sitesEnabled?: boolean, loginEnabled?: boolean}} [options]
+ * @param {{action?: string, provider?: string, db?: import('@cloudflare/workers-types').D1Database, env?: any, sitesUserId?: string, sitesEmail?: string, now?: () => number, fetch?: typeof globalThis.fetch, timeoutMs?: number, sitesEnabled?: boolean, loginEnabled?: boolean, reauthEnabled?: boolean}} [options]
  * @returns {Promise<Response>}
  */
 export async function handleAuthRequest(request, {
   action, provider: providerId, db, env = {}, sitesUserId, sitesEmail, now = Date.now,
-  fetch: fetcher = globalThis.fetch, timeoutMs = AUTH_LIMITS.upstreamTimeoutMs, sitesEnabled = true, loginEnabled = true,
+  fetch: fetcher = globalThis.fetch, timeoutMs = AUTH_LIMITS.upstreamTimeoutMs, sitesEnabled = true, loginEnabled = true, reauthEnabled = false,
 } = {}) {
   const definition = { status: 'GET', start: 'POST', callback: 'GET', logout: 'POST', 'sites-start': 'POST' };
   try {
@@ -660,9 +759,28 @@ export async function handleAuthRequest(request, {
       throw new AuthError(403, 'ORIGIN_REJECTED', 'invalid_request');
     }
     const database = usableDb(db);
-    const options = { db: database, env, sitesUserId, sitesEmail, now, fetch: fetcher, timeoutMs };
+    const options = { db: database, env, sitesUserId, sitesEmail, now, fetch: fetcher, timeoutMs, loginEnabled, reauthEnabled };
     if (action === 'status') {
       const resolved = await resolveInternal(request, options);
+      const reauthProviders = AUTH_PROVIDER_IDS.map(id => {
+        const config = providerConfig(id, env);
+        const reason = !reauthEnabled ? 'reauthentication_not_ready' : !resolved?.sessionHash ? 'sign_in_required'
+          : !resolved.linkedProviders.includes(id) ? 'not_linked' : config.reason;
+        return { id, name: config.name, enabled: reason === 'ready', reason };
+      });
+      let reauthContext = null;
+      let playerId = null;
+      if (resolved?.sessionHash) {
+        const current = await database.prepare(`SELECT p.public_id FROM auth_sessions s
+          JOIN auth_accounts a ON a.id = s.account_id LEFT JOIN game_players p ON p.id = s.account_id
+          WHERE s.token_hash = ? AND s.account_id = ? AND s.revoked_at IS NULL AND s.expires_at > ?
+            AND a.disabled_at IS NULL AND ${accountAllowedSql('a.id')}`)
+          .bind(resolved.sessionHash, resolved.userId, timestamp(now)).first();
+        if (current) {
+          reauthContext = await digest(`privacy:${resolved.sessionHash}`);
+          playerId = current.public_id ?? null;
+        }
+      }
       return json({
         authenticated: !!resolved,
         sites: { enabled: sitesEnabled },
@@ -671,12 +789,17 @@ export async function handleAuthRequest(request, {
           const config = providerConfig(id, env);
           return { id, name: config.name, enabled: loginEnabled && config.enabled, reason: loginEnabled ? config.reason : 'admission_not_ready' };
         }),
+        reauthentication: {
+          enabled: reauthContext !== null && reauthProviders.some(item => item.enabled),
+          accountContext: reauthContext, playerId,
+          providers: reauthProviders.map(item => ({ ...item, enabled: reauthContext !== null && item.enabled })),
+        },
         registration: {
           open: env.HARU_REGISTRATION_OPEN === 'true', ageTarget: '전체이용가 목표', minimumSignupAge: null, guardianReady: false,
         },
       });
     }
-    if (!loginEnabled && (action === 'start' || action === 'callback')) {
+    if (!loginEnabled && !reauthEnabled && (action === 'start' || action === 'callback')) {
       throw new AuthError(503, 'AUTH_NOT_CONFIGURED', 'provider_disabled');
     }
     if (action === 'start') return await start(request, providerConfig(providerId, env), options);
@@ -693,6 +816,8 @@ export async function handleAuthRequest(request, {
 /** Trusted server-only resolver for account rights; no caller-supplied identity. */
 export async function resolvePrivacyIdentity(request, { db, env = {}, now = Date.now } = {}) {
   const resolved = await resolveInternal(request, { db: usableDb(db), env, now });
-  if (!resolved?.sessionHash || !Number.isSafeInteger(resolved.sessionCreatedAt)) return null;
-  return { userId: resolved.userId, sessionHash: resolved.sessionHash, authenticatedAt: resolved.sessionCreatedAt, accountContext: await digest(`privacy:${resolved.sessionHash}`) };
+  if (!resolved?.sessionHash) return null;
+  return { userId: resolved.userId, sessionHash: resolved.sessionHash,
+    authenticatedAt: Number.isSafeInteger(resolved.authenticatedAt) ? resolved.authenticatedAt : null,
+    accountContext: await digest(`privacy:${resolved.sessionHash}`) };
 }

@@ -36,12 +36,12 @@ function fixture(t) {
       db.sqlite.prepare("INSERT OR IGNORE INTO privacy_account_controls VALUES (?, 'active', ?)").run(id, clock);
       return id;
     },
-    session(accountId, { createdAt = clock, expiresAt = clock + 86400000 } = {}) {
+    session(accountId, { createdAt = clock, authenticatedAt = clock, expiresAt = clock + 86400000 } = {}) {
       f.account(accountId);
       const token = Buffer.alloc(32, ++serial).toString('base64url');
       db.sqlite.prepare(`INSERT INTO auth_sessions
-        (token_hash, account_id, provider, created_at, expires_at, binding_hash)
-        VALUES (?, ?, 'google', ?, ?, ?)`).run(hash(token), accountId, createdAt, expiresAt, `secret-binding-${accountId}`);
+        (token_hash, account_id, provider, created_at, authenticated_at, expires_at, binding_hash)
+        VALUES (?, ?, 'google', ?, ?, ?, ?)`).run(hash(token), accountId, createdAt, authenticatedAt, expiresAt, `secret-binding-${accountId}`);
       return { token, hash: hash(token), headers: { Cookie: `${AUTH_COOKIES.session}=${token}` } };
     },
     call(pathname, {
@@ -122,19 +122,40 @@ test('privacy endpoints reject unauthenticated, forged Sites and invalid opaque 
   }
 });
 
-test('expired and fifteen-minute-old sessions cannot use privacy rights', async t => {
+test('expired sessions and missing, old or future verified authentication times cannot use privacy rights', async t => {
   const f = fixture(t);
-  const expired = f.session('expired', { createdAt: START - 60000, expiresAt: START });
-  const stale = f.session('stale', { createdAt: START - PRIVACY_LIMITS.freshSessionMs });
-  const future = f.session('future', { createdAt: START + 1 });
-  for (const [session, code] of [[expired, 'SIGN_IN_REQUIRED'], [stale, 'REAUTH_REQUIRED'], [future, 'REAUTH_REQUIRED']]) {
+  const expired = f.session('expired', { createdAt: START - 60000, authenticatedAt: START - 60000, expiresAt: START });
+  const stale = f.session('stale', { authenticatedAt: START - PRIVACY_LIMITS.freshSessionMs });
+  const future = f.session('future', { createdAt: START + 1, authenticatedAt: START + 1 });
+  const unverified = f.session('unverified', { authenticatedAt: null });
+  for (const [session, code] of [[expired, 'SIGN_IN_REQUIRED'], [stale, 'REAUTH_REQUIRED'], [future, 'REAUTH_REQUIRED'], [unverified, 'REAUTH_REQUIRED']]) {
     await expectCode(await f.call('/api/privacy/status', { headers: session.headers }), 401, code);
     await expectCode(await f.call('/api/privacy/children', { headers: session.headers }), 401, code);
     await expectCode(await f.post('export', session, 'old-context'), 401, code);
   }
   assert.equal(f.db.rows('SELECT * FROM game_rate_limits').length, 0);
-  const fresh = f.session('fresh', { createdAt: START - PRIVACY_LIMITS.freshSessionMs + 1000 });
+  const fresh = f.session('fresh', { authenticatedAt: START - PRIVACY_LIMITS.freshSessionMs + 1000 });
   assert.equal((await f.call('/api/privacy/status', { headers: fresh.headers })).status, 200);
+});
+
+test('an ordinary fresh session still plays but cannot create recent-auth privacy authority without signed authentication time', async t => {
+  const f = fixture(t);
+  const session = f.session('game-only-session', { authenticatedAt: null });
+  const game = await f.call('/api/game/bootstrap', { headers: session.headers });
+  assert.equal(game.status, 200);
+  const before = f.db.rows('SELECT * FROM game_rate_limits');
+  for (const path of ['/api/privacy/status', '/api/privacy/children', '/api/guardian/requests']) {
+    await expectCode(await f.call(path, { headers: session.headers }), 401, 'REAUTH_REQUIRED');
+  }
+  for (const action of ['status', 'export', 'withdraw', 'delete']) {
+    await expectCode(await f.post(action, session, 'unverified-context', {
+      ...(['withdraw', 'delete'].includes(action) ? { confirmation: action } : {}),
+    }), 401, 'REAUTH_REQUIRED');
+  }
+  assert.deepEqual(f.db.rows('SELECT * FROM game_rate_limits'), before);
+  assert.equal(f.db.rows('SELECT * FROM privacy_deletion_jobs').length, 0);
+  assert.equal(f.db.rows('SELECT * FROM guardian_requests').length, 0);
+  assert.equal(f.db.rows("SELECT state FROM privacy_account_controls WHERE account_id='game-only-session'")[0].state, 'active');
 });
 
 test('privacy status exposes a session context and unready enrollment without creating a player', async t => {
@@ -170,7 +191,7 @@ test('privacy status identifies the current public game profile across an accoun
   assert.doesNotMatch(JSON.stringify(secondStatus), /profile-first|profile-second|secret-binding/);
 });
 
-for (const invalidation of ['logout', 'withdrawn']) {
+for (const invalidation of ['logout', 'withdrawn', 'authentication-reset']) {
   test(`privacy status rejects ${invalidation} before the final profile query without partial status data`, async t => {
     const f = fixture(t);
     const session = f.session('profile-race');
@@ -182,8 +203,10 @@ for (const invalidation of ['logout', 'withdrawn']) {
       intervened = true;
       if (invalidation === 'logout') {
         assert.equal((await f.call('/api/auth/logout', { method: 'POST', body: {}, headers: session.headers })).status, 200);
-      } else {
+      } else if (invalidation === 'withdrawn') {
         f.db.sqlite.prepare("UPDATE privacy_account_controls SET state='withdrawn' WHERE account_id='profile-race'").run();
+      } else {
+        f.db.sqlite.prepare("UPDATE auth_sessions SET authenticated_at=NULL WHERE account_id='profile-race'").run();
       }
     };
     const response = await f.call('/api/privacy/status', { headers: session.headers });
@@ -502,7 +525,7 @@ test('children endpoint accepts only a same-origin GET without client-selected g
   assert.equal(response.headers.get('Allow'), 'GET');
 });
 
-for (const invalidation of ['logout', 'freshness', 'blocked']) {
+for (const invalidation of ['logout', 'freshness', 'blocked', 'authentication-reset']) {
   test(`queued child list rejects ${invalidation} after HTTP authentication without exposing family data`, async t => {
     const f = fixture(t);
     f.family('queued-parent', 'queued-child');
@@ -516,8 +539,10 @@ for (const invalidation of ['logout', 'freshness', 'blocked']) {
         assert.equal((await f.call('/api/auth/logout', { method: 'POST', body: {}, headers: session.headers })).status, 200);
       } else if (invalidation === 'freshness') {
         f.advance(PRIVACY_LIMITS.freshSessionMs);
-      } else {
+      } else if (invalidation === 'blocked') {
         f.db.sqlite.prepare("UPDATE privacy_account_controls SET state='withdrawn' WHERE account_id='queued-parent'").run();
+      } else {
+        f.db.sqlite.prepare("UPDATE auth_sessions SET authenticated_at=NULL WHERE account_id='queued-parent'").run();
       }
     };
     const response = await f.list('/api/privacy/children', session);

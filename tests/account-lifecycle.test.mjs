@@ -19,6 +19,7 @@ function fixture(t, { policy = POLICY } = {}) {
   const db = createSQLiteD1();
   t.after(() => db.close());
   let time = START, serial = 0;
+  db.sqlite.function('unixepoch', _argument => Math.floor(time / 1000));
   const lifecycle = createAccountLifecycle({ db, now: () => time, uuid: () => `delete-${++serial}`, purgePolicy: policy });
   return { db, lifecycle, tick: ms => { time += ms; }, now: () => time };
 }
@@ -28,8 +29,8 @@ async function seed(f, accountId, { player = true } = {}) {
   await f.db.prepare(`INSERT INTO auth_identities (id,account_id,provider,issuer,audience,subject,linked_at)
     VALUES (?,?,'google','https://accounts.google.com','client-test',?,?)`)
     .bind(`identity-${accountId}`, accountId, `secret-subject-${accountId}`, START).run();
-  await f.db.prepare(`INSERT INTO auth_sessions (token_hash,binding_hash,account_id,provider,created_at,expires_at)
-    VALUES (?,?,?,'google',?,?)`).bind(`session-${accountId}`, `binding-${accountId}`, accountId, START, START + 86400000).run();
+  await f.db.prepare(`INSERT INTO auth_sessions (token_hash,binding_hash,account_id,provider,created_at,authenticated_at,expires_at)
+    VALUES (?,?,?,'google',?,?,?)`).bind(`session-${accountId}`, `binding-${accountId}`, accountId, START, START, START + 86400000).run();
   if (!player) return;
   await f.db.prepare(`INSERT INTO game_players (id,public_id,name,coins,owned,equipped,created_day,created_at)
     VALUES (?,?,'구름토끼',180,'["character-rabbit"]','{"character":"rabbit"}','2026-10-20',?)`)
@@ -253,16 +254,33 @@ test('concurrent delete requests converge on one receipt and deleted state is te
   assert.equal((await f.lifecycle.requestDeletion({ actorId: 'self', accountId: 'self' })).state, 'deleted');
 });
 
-async function sessionService(f, accountId) {
-  const tokenHash = 'f'.repeat(64), at = Date.now();
+async function sessionService(f, accountId, { createdAt = f.now(), authenticatedAt = f.now() } = {}) {
+  const tokenHash = 'f'.repeat(64), at = f.now();
   await f.db.prepare(`INSERT INTO auth_sessions
-    (token_hash,account_id,provider,created_at,expires_at) VALUES (?,?,'google',?,?)`)
-    .bind(tokenHash, accountId, at, at + 86400000).run();
+    (token_hash,account_id,provider,created_at,authenticated_at,expires_at) VALUES (?,?,'google',?,?,?)`)
+    .bind(tokenHash, accountId, createdAt, authenticatedAt, at + 86400000).run();
   return {
     tokenHash,
     lifecycle: createAccountLifecycle({ db: f.db, now: f.now, sessionProof: { tokenHash }, purgePolicy: POLICY }),
   };
 }
+
+test('all session-bound lifecycle rights require verified authentication time rather than recent session creation', async t => {
+  for (const authenticatedAt of [null, START - 900000, START + 1000]) await t.test(String(authenticatedAt), async t => {
+    const f = fixture(t);
+    await seed(f, 'self');
+    const { lifecycle } = await sessionService(f, 'self', {
+      authenticatedAt, createdAt: authenticatedAt > START ? authenticatedAt : START,
+    });
+    const input = { actorId: 'self', accountId: 'self' };
+    for (const method of ['getStatus', 'getProfileContext', 'listChildren', 'exportData', 'withdraw', 'requestDeletion']) {
+      await assert.rejects(lifecycle[method](input), rejected('RIGHTS_UNAVAILABLE'), method);
+    }
+    assert.equal(f.db.rows('SELECT * FROM privacy_account_controls').length, 0);
+    assert.equal(f.db.rows('SELECT * FROM privacy_deletion_jobs').length, 0);
+    assert.equal(f.db.rows("SELECT disabled_at FROM auth_accounts WHERE id='self'")[0].disabled_at, null);
+  });
+});
 
 test('self withdrawal returns its committed receipt while revoking the proof used for all subsequent rights requests', async t => {
   const f = fixture(t);
@@ -278,7 +296,7 @@ test('self withdrawal returns its committed receipt while revoking the proof use
 });
 
 test('logout or expiration after rights preflight fences a delayed destructive transaction', async t => {
-  for (const invalidation of ['logout', 'freshness', 'expiry']) await t.test(invalidation, async t => {
+  for (const invalidation of ['logout', 'freshness', 'expiry', 'authentication-reset']) await t.test(invalidation, async t => {
     const f = fixture(t);
     await seed(f, 'self');
     const { lifecycle, tokenHash } = await sessionService(f, 'self');
@@ -292,14 +310,16 @@ test('logout or expiration after rights preflight fences a delayed destructive t
     };
     const pending = lifecycle.requestDeletion({ actorId: 'self', accountId: 'self' });
     await entered;
-    const at = Date.now();
+    const at = f.now();
     if (invalidation === 'logout') {
       await f.db.prepare('UPDATE auth_sessions SET revoked_at = ? WHERE token_hash = ?').bind(at, tokenHash).run();
     } else if (invalidation === 'freshness') {
-      await f.db.prepare('UPDATE auth_sessions SET created_at = ? WHERE token_hash = ?').bind(at - 16 * 60000, tokenHash).run();
+      await f.db.prepare('UPDATE auth_sessions SET authenticated_at = ? WHERE token_hash = ?').bind(at - 16 * 60000, tokenHash).run();
+    } else if (invalidation === 'authentication-reset') {
+      await f.db.prepare('UPDATE auth_sessions SET authenticated_at = NULL WHERE token_hash = ?').bind(tokenHash).run();
     } else {
-      await f.db.prepare('UPDATE auth_sessions SET created_at = ?, expires_at = ? WHERE token_hash = ?')
-        .bind(at - 60000, at - 1000, tokenHash).run();
+      await f.db.prepare('UPDATE auth_sessions SET created_at = ?, authenticated_at = ?, expires_at = ? WHERE token_hash = ?')
+        .bind(at - 60000, at - 60000, at - 1000, tokenHash).run();
     }
     release();
     await assert.rejects(pending, rejected('RIGHTS_UNAVAILABLE'));
@@ -314,7 +334,7 @@ test('session deadline crossing inside a transaction rolls back every partial cl
     const f = fixture(t);
     await seed(f, 'self');
     const { lifecycle, tokenHash } = await sessionService(f, 'self');
-    const seconds = Math.floor(Date.now() / 1000);
+    const seconds = Math.floor(f.now() / 1000);
     let inside = false, calls = 0;
     f.db.sqlite.function('unixepoch', _argument => {
       if (!inside) return seconds;
@@ -366,7 +386,7 @@ test('a session deadline crossing during list reads rejects the accumulated fami
   await seed(f, 'child');
   await guardian(f, 'parent', 'child');
   const { lifecycle } = await sessionService(f, 'parent');
-  const seconds = Math.floor(Date.now() / 1000);
+  const seconds = Math.floor(f.now() / 1000);
   let inside = false, calls = 0;
   f.db.sqlite.function('unixepoch', _argument => {
     if (!inside) return seconds;

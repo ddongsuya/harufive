@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readdirSync, copyFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { once } from 'node:events';
@@ -21,9 +21,34 @@ test('persistent local database applies migrations once and keeps existing recor
   db.close(); db = createSQLiteD1({ filename });
   try {
     assert.equal(db.rows('SELECT * FROM auth_accounts').length, 1);
-    assert.equal(db.rows('SELECT * FROM local_schema_migrations').length, 5);
+    assert.equal(db.rows('SELECT * FROM local_schema_migrations').length, 6);
     assert.deepEqual(db.rows("SELECT name FROM sqlite_schema WHERE type = 'table' AND name IN ('guardian_requests','guardian_consents','guardian_links','privacy_account_controls','privacy_deletion_jobs') ORDER BY name").map(row => row.name),
       ['guardian_consents', 'guardian_links', 'guardian_requests', 'privacy_account_controls', 'privacy_deletion_jobs']);
+  } finally { db.close(); }
+});
+
+test('upgrading existing sessions preserves gameplay credentials without inventing recent authentication', t => {
+  const folder = directory(t), migrations = path.join(folder, 'migrations'), filename = path.join(folder, 'upgrade.sqlite');
+  mkdirSync(migrations);
+  const source = new URL('../drizzle/', import.meta.url);
+  const files = readdirSync(source).filter(name => name.endsWith('.sql')).sort();
+  for (const name of files.filter(name => /^000[0-4]_/.test(name))) {
+    copyFileSync(new URL(name, source), path.join(migrations, name));
+  }
+  let db = createSQLiteD1({ filename, migrations });
+  db.sqlite.prepare('INSERT INTO auth_accounts (id, created_at) VALUES (?, ?)').run('legacy-auth', 1000);
+  db.sqlite.prepare(`INSERT INTO auth_sessions (token_hash, account_id, provider, created_at, expires_at)
+    VALUES (?, 'legacy-auth', 'google', 1000, 86401000)`).run('a'.repeat(64));
+  db.close();
+  for (const name of files) copyFileSync(new URL(name, source), path.join(migrations, name));
+  db = createSQLiteD1({ filename, migrations });
+  try {
+    assert.deepEqual(db.rows('SELECT account_id, created_at, expires_at, revoked_at, authenticated_at FROM auth_sessions'), [{
+      account_id: 'legacy-auth', created_at: 1000, expires_at: 86401000, revoked_at: null, authenticated_at: null,
+    }]);
+    assert.equal(db.rows("PRAGMA foreign_key_check").length, 0);
+    assert.throws(() => db.sqlite.prepare('UPDATE auth_sessions SET authenticated_at=?').run(-1), /CHECK/);
+    assert.throws(() => db.sqlite.prepare('UPDATE auth_sessions SET authenticated_at=?').run(1001), /CHECK/);
   } finally { db.close(); }
 });
 

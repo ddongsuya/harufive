@@ -263,12 +263,36 @@ test('database commit rejects a child binding queued past its original request d
   assert.equal(h.db.rows('SELECT state FROM guardian_requests')[0].state, 'approved');
 });
 
-function sessionService(h, { createdAt = CLOCK, expiresAt = CLOCK + 86400000 } = {}) {
+function sessionService(h, { createdAt = CLOCK, authenticatedAt = CLOCK, expiresAt = CLOCK + 86400000 } = {}) {
   const tokenHash = 'a'.repeat(64);
-  h.db.sqlite.prepare(`INSERT INTO auth_sessions (token_hash,account_id,provider,created_at,expires_at)
-    VALUES (?, 'guardian-one','google',?,?)`).run(tokenHash, createdAt, expiresAt);
+  h.db.sqlite.prepare(`INSERT INTO auth_sessions (token_hash,account_id,provider,created_at,authenticated_at,expires_at)
+    VALUES (?, 'guardian-one','google',?,?,?)`).run(tokenHash, createdAt, authenticatedAt, expiresAt);
   return createGuardianService({ db: h.db, env: ENV, now: h.now, sessionProof: { tokenHash } });
 }
+
+test('guardian rights reject fresh sessions without recent verified authentication proof', async t => {
+  for (const authenticatedAt of [null, CLOCK - 900000, CLOCK + 1000]) {
+    const h = harness(t);
+    const bound = await approved(h);
+    await h.service.bindChild('guardian-one', { requestId: bound.requestId, childId: 'child-one' });
+    const pending = await h.service.createRequest('guardian-one');
+    const grant = await approved(h);
+    const service = sessionService(h, { authenticatedAt, createdAt: authenticatedAt > CLOCK ? authenticatedAt : CLOCK });
+    const before = ['guardian_requests', 'guardian_consents', 'guardian_links', 'privacy_account_controls']
+      .map(table => h.db.rows(`SELECT * FROM ${table}`));
+    for (const action of [
+      () => service.createRequest('guardian-one'),
+      () => service.listRequests('guardian-one'),
+      () => service.rotateRequestToken('guardian-one', pending.requestId),
+      () => service.approveRequest('guardian-one', grant),
+      () => service.rejectRequest('guardian-one', pending.requestId),
+      () => service.bindChild('guardian-one', { requestId: grant.requestId, childId: 'child-two' }),
+      () => service.authorizeGuardian('guardian-one', 'child-one'),
+    ]) await assert.rejects(action, code('GUARDIAN_ACCESS_DENIED'));
+    assert.deepEqual(['guardian_requests', 'guardian_consents', 'guardian_links', 'privacy_account_controls']
+      .map(table => h.db.rows(`SELECT * FROM ${table}`)), before);
+  }
+});
 
 test('guardian final queries deny a session revoked after preflight for both create and request listing', async t => {
   for (const action of ['create', 'list']) {
@@ -289,10 +313,10 @@ test('guardian final queries deny a session revoked after preflight for both cre
 });
 
 test('guardian approval commit rechecks logout, session expiration, and the fresh-authentication deadline', async t => {
-  for (const boundary of ['logout', 'expiry', 'freshness']) {
+  for (const boundary of ['logout', 'expiry', 'freshness', 'authentication-reset']) {
     const h = harness(t);
     const service = sessionService(h, {
-      createdAt: boundary === 'freshness' ? CLOCK - 899000 : CLOCK,
+      authenticatedAt: boundary === 'freshness' ? CLOCK - 899000 : CLOCK,
       expiresAt: boundary === 'expiry' ? CLOCK + 1000 : CLOCK + 86400000,
     });
     const request = await h.service.createRequest('guardian-one');
@@ -301,6 +325,7 @@ test('guardian approval commit rechecks logout, session expiration, and the fres
       if (statements[0].sql.includes("state = 'approved'")) {
         h.db.beforeBatch = null;
         if (boundary === 'logout') h.db.sqlite.exec(`UPDATE auth_sessions SET revoked_at=${CLOCK} WHERE account_id='guardian-one'`);
+        else if (boundary === 'authentication-reset') h.db.sqlite.exec("UPDATE auth_sessions SET authenticated_at=NULL WHERE account_id='guardian-one'");
         else h.setTime(CLOCK + 1000);
       }
     };

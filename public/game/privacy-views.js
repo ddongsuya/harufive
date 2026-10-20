@@ -19,7 +19,7 @@ export function guardianPage(){
   </section>`;
 }
 
-export function privacyPage({signedIn=false,loading=false,busy=false,status=null,children=[],hasMore=false,selected=null,error='',notice='',uncertain=false}={}){
+export function privacyPage({signedIn=false,loading=false,busy=false,status=null,children=[],hasMore=false,selected=null,error='',notice='',uncertain=false,reauthentication=null}={}){
   const ready=!!status&&signedIn&&!loading&&!error;
   const selectedChild=children.find(child=>child.childAccountId===selected);
   const childAllowed=ready&&status.capabilities?.childManagement===true&&!busy&&!uncertain;
@@ -30,6 +30,7 @@ export function privacyPage({signedIn=false,loading=false,busy=false,status=null
   return `<section class="privacy-page" aria-labelledby="privacy-title">
     <div class="privacy-page-heading"><span class="tag neutral">기록과 동의</span><h1 id="privacy-title">나의 정보 관리</h1><p>나의 기록을 살펴보고,<br>연결된 어린이의 정보를 관리해요.</p></div>
     ${permissionNotice}
+    ${signedIn?`<section class="card privacy-section privacy-reauth" aria-labelledby="reauth-title"><h2 id="reauth-title">최근 본인 확인</h2><p>기록을 받거나 동의를 관리하기 전에 현재 계정에 연결된 로그인으로 다시 확인해요. 확인을 마친 뒤에도 요청할 작업은 직접 선택해 주세요.</p><div class="privacy-actions">${[['kakao','카카오'],['google','Google'],['naver','네이버']].map(([id,label])=>button('auth-reauth',`${label}로 다시 확인`,{disabled:busy||!reauthentication?.enabled||!reauthentication.providers?.some(provider=>provider.id===id&&provider.enabled),extra:`data-provider="${id}"`})).join('')}</div><p class="privacy-small">${reauthentication?.enabled?'현재 계정에 연결된 로그인만 선택할 수 있어요.':'최근 본인 확인을 연결하고 있어요. 지금은 이 화면에서 새로 확인할 수 없어요.'}</p></section>`:''}
     ${loading?'<div class="privacy-notice" role="status">현재 계정의 정보 관리 권한을 확인하고 있어요…</div>':''}
     ${error?`<div class="privacy-notice warning" role="alert">${text(error)}</div>`:''}
     ${notice?`<div class="privacy-notice" role="status">${text(notice)}</div>`:''}

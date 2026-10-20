@@ -1,3 +1,4 @@
+import { accountAllowedSql } from './privacy-contract.mjs';
 /**
  * Server-authoritative game service. Only this module imports the private
  * question generators. Public responses are assembled using allow lists.
@@ -19,7 +20,7 @@ const FREE_ITEMS = CATALOG.filter(item => item.cost === 0).map(item => item.id);
 const MAX_CAS_ATTEMPTS = 12;
 const MAX_RECENT_RESULTS = 90;
 const MAX_ID_LENGTH = 200;
-const GATE = 'EXISTS (SELECT 1 FROM game_players WHERE id = ? AND mutation_token = ?)';
+const GATE = `EXISTS (SELECT 1 FROM game_players WHERE id = ? AND mutation_token = ? AND ${accountAllowedSql('game_players.id')})`;
 
 export class GameError extends Error {
   constructor(status, code, message) {
@@ -123,7 +124,7 @@ function awardToPublic(row) {
 const WEEK_TOTALS = `WITH totals AS (
   SELECT user_id, SUM(correct) AS correct, SUM(total_time_ms) AS total_time_ms,
          COUNT(*) AS played_days
-  FROM game_results WHERE week = ? AND mode = 'daily' GROUP BY user_id
+  FROM game_results WHERE week = ? AND mode = 'daily' AND ${accountAllowedSql('game_results.user_id')} GROUP BY user_id
 ), ranked AS (
   SELECT *, RANK() OVER (ORDER BY correct DESC,
     CASE WHEN correct = 0 THEN 0 ELSE total_time_ms END ASC) AS rank,
@@ -156,17 +157,22 @@ export function createGameService({ db, now = Date.now, uuid = () => globalThis.
   const prepare = (sql, values = []) => database.prepare(sql).bind(...values);
   const first = (sql, values = []) => prepare(sql, values).first();
   const all = async (sql, values = []) => (await prepare(sql, values).all()).results || [];
-  const loadPlayer = async userId => unpackPlayer(await first('SELECT * FROM game_players WHERE id = ?', [userId]));
+  const requireAllowed = row => {
+    if (!row) fail(403, 'ACCOUNT_RESTRICTED', '동의 철회 또는 탈퇴 처리 중인 계정이에요.');
+    return row;
+  };
+  const loadPlayer = async userId => unpackPlayer(requireAllowed(await first(
+    `SELECT * FROM game_players WHERE id = ? AND ${accountAllowedSql('game_players.id')}`, [userId])));
   const gateArgs = (userId, token) => [userId, token];
 
   async function ensureProfile(userId, timestamp) {
     await database.batch([
       prepare(`INSERT OR IGNORE INTO game_players
         (id, public_id, name, coins, owned, equipped, active_id, revision, mutation_token, created_day, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, NULL, 0, NULL, ?, ?)`,
-      [userId, uuid(), '구름토끼', WELCOME_COINS, JSON.stringify(FREE_ITEMS), JSON.stringify(DEFAULT_EQUIPMENT), dateKey(timestamp), timestamp]),
+        SELECT candidate.id, ?, ?, ?, ?, ?, NULL, 0, NULL, ?, ? FROM (SELECT ? AS id) candidate WHERE ${accountAllowedSql('candidate.id')}`,
+      [uuid(), '구름토끼', WELCOME_COINS, JSON.stringify(FREE_ITEMS), JSON.stringify(DEFAULT_EQUIPMENT), dateKey(timestamp), timestamp, userId]),
       prepare(`INSERT OR IGNORE INTO game_coin_ledger (user_id, reference, reason, amount, created_at)
-        SELECT id, 'welcome', 'welcome', ?, created_at FROM game_players WHERE id = ?`, [WELCOME_COINS, userId]),
+        SELECT id, 'welcome', 'welcome', ?, created_at FROM game_players WHERE id = ? AND ${accountAllowedSql('game_players.id')}`, [WELCOME_COINS, userId]),
     ]);
   }
 
@@ -195,7 +201,7 @@ export function createGameService({ db, now = Date.now, uuid = () => globalThis.
   function playerUpdate(player, next, token, extraWhere = '', extraValues = []) {
     return prepare(`UPDATE game_players SET name = ?, coins = ?, owned = ?, equipped = ?, active_id = ?,
       revision = revision + 1, mutation_token = ?
-      WHERE id = ? AND revision = ? ${extraWhere}`,
+      WHERE id = ? AND revision = ? AND ${accountAllowedSql('game_players.id')} ${extraWhere}`,
     [next.name, next.coins, JSON.stringify(next.owned), JSON.stringify(next.equipped), next.active_id,
       token, player.id, player.revision, ...extraValues]);
   }
@@ -240,6 +246,7 @@ export function createGameService({ db, now = Date.now, uuid = () => globalThis.
     requireUser(userId);
     const timestamp = clock();
     await ensureProfile(userId, timestamp);
+    await loadPlayer(userId);
     await closePastWeeks(timestamp);
     await expireAttempt(userId, timestamp);
     await claimWeeklyAwards(userId, timestamp);
@@ -249,7 +256,7 @@ export function createGameService({ db, now = Date.now, uuid = () => globalThis.
     const timestamp = clock(), today = dateKey(timestamp), week = weekKey(today);
     const recent = addDays(today, -(MAX_RECENT_RESULTS - 1));
     const queries = await database.batch([
-      prepare('SELECT * FROM game_players WHERE id = ?', [userId]),
+      prepare(`SELECT * FROM game_players WHERE id = ? AND ${accountAllowedSql('game_players.id')}`, [userId]),
       prepare(`SELECT a.* FROM game_attempts a JOIN game_players p ON p.active_id = a.id
         WHERE p.id = ? AND a.user_id = ?`, [userId, userId]),
       prepare(`SELECT result FROM game_results WHERE user_id = ? AND mode = 'daily' AND day >= ? AND day <= ? ORDER BY day DESC LIMIT 90`, [userId, recent, today]),
@@ -265,7 +272,7 @@ export function createGameService({ db, now = Date.now, uuid = () => globalThis.
       prepare('SELECT day FROM game_attempts WHERE user_id = ? AND mode = ? AND day = ?', [userId, 'practice', today]),
     ]);
     const rows = queries.map(query => query.results || []);
-    const player = unpackPlayer(rows[0][0]);
+    const player = unpackPlayer(requireAllowed(rows[0][0]));
     const standings = rows[6].map(row => mapStanding(row, userId));
     const me = standings.find(row => row.isMe) || null;
     const total = rows[6][0]?.participants || 0;
@@ -495,18 +502,20 @@ export function createGameService({ db, now = Date.now, uuid = () => globalThis.
     await maintainUser(userId);
     const response = await snapshot(userId);
     const data = await database.batch([
+      prepare(`SELECT id FROM game_players WHERE id = ? AND ${accountAllowedSql('game_players.id')}`, [userId]),
       prepare('SELECT result FROM game_results WHERE user_id = ? ORDER BY day, mode', [userId]),
       prepare('SELECT reference, reason, amount, created_at AS createdAt FROM game_coin_ledger WHERE user_id = ? ORDER BY created_at, reference', [userId]),
       prepare('SELECT day, mode, status, created_at AS createdAt, completed_at AS completedAt FROM game_attempts WHERE user_id = ? ORDER BY day, mode', [userId]),
     ]);
+    requireAllowed(data[0].results[0]);
     return {
       ...response,
       export: {
         format: 'haru-five-account-v1', exportedAt: new Date(response.serverNow).toISOString(),
         profile: { playerId: response.state.playerId, name: response.state.name, coins: response.state.coins,
           owned: response.state.owned, equipped: response.state.equipped, createdAt: response.state.createdAt },
-        results: data[0].results.map(row => readJson(row.result)),
-        awards: response.state.awards, coinLedger: data[1].results, attempts: data[2].results,
+        results: data[1].results.map(row => readJson(row.result)),
+        awards: response.state.awards, coinLedger: data[2].results, attempts: data[3].results,
       },
     };
   }

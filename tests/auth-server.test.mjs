@@ -450,3 +450,34 @@ test('pending flow and quota storage are bounded, and accounts retain at most fi
   await h.begin();
   assert.equal(h.db.rows('SELECT * FROM auth_oauth_transactions').length, 1);
 });
+
+test('withdrawal during provider exchange blocks both login and linking at commit', async t => {
+  const { createAccountLifecycle } = await import('../server/account-lifecycle.mjs');
+  for (const intent of ['login', 'link']) await t.test(intent, async t => {
+    const h = harness(t, { env: { HARU_REGISTRATION_OPEN: 'true' } });
+    const first = await h.login();
+    const owner = (await h.identity(first.cookie)).userId;
+    h.env.HARU_REGISTRATION_OPEN = 'false';
+    const flow = await h.begin({ intent, provider: intent === 'link' ? 'naver' : 'google', cookie: intent === 'link' ? first.cookie : '' });
+    h.pause = { entered: deferred(), release: deferred() };
+    const pending = h.callback(flow);
+    await h.pause.entered.promise;
+    await createAccountLifecycle({ db: h.db, now: h.now }).withdraw({ actorId: owner, accountId: owner });
+    h.pause.release.resolve();
+    const response = await pending;
+    assert.doesNotMatch(response.headers.get('Location'), /auth=success|auth=linked/);
+    assert.equal(response.headers.getSetCookie().length, 0);
+    assert.equal(h.db.rows('SELECT * FROM auth_sessions WHERE revoked_at IS NULL').length, 0);
+    assert.deepEqual(h.db.rows('SELECT provider FROM auth_identities').map(row => row.provider), ['google']);
+    assert.equal(h.db.rows('SELECT * FROM auth_oauth_transactions').length, 0);
+    assert.equal(await h.identity(first.cookie), null);
+  });
+});
+
+test('terminated legacy Sites accounts cannot return through trusted tester access', async t => {
+  const h = harness(t, { env: { HARU_SITES_TESTER_EMAIL: 'owner@example.test' }, sitesUserId: 'old-owner', sitesEmail: 'owner@example.test' });
+  h.db.sqlite.prepare("INSERT INTO privacy_account_controls (account_id, state, updated_at) VALUES (?, 'deleted', ?)").run('old-owner', CLOCK);
+  assert.equal(await h.identity(`${AUTH_COOKIES.session}=sites`), null);
+  assert.equal(h.db.rows('SELECT * FROM auth_accounts').length, 0);
+  assert.equal(h.db.rows('SELECT * FROM game_players').length, 0);
+});

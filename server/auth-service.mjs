@@ -1,3 +1,4 @@
+import { accountAllowedSql } from './privacy-contract.mjs';
 import { createLocalJWKSet, jwtVerify } from 'jose';
 
 // These are application sign-ins inside a Site. None of the Sites platform's
@@ -203,17 +204,19 @@ async function resolveInternal(request, { db, env, sitesUserId, sitesEmail, now 
   if (current.value !== 'sites') {
     if (!TOKEN.test(current.value || '')) return null;
     const tokenHash = await digest(current.value);
-    const row = await db.prepare(`SELECT s.account_id, s.provider FROM auth_sessions s
+    const row = await db.prepare(`SELECT s.account_id, s.provider, s.created_at FROM auth_sessions s
       JOIN auth_accounts a ON a.id = s.account_id
-      WHERE s.token_hash = ? AND s.revoked_at IS NULL AND s.expires_at > ? AND a.disabled_at IS NULL`)
+      WHERE s.token_hash = ? AND s.revoked_at IS NULL AND s.expires_at > ? AND a.disabled_at IS NULL AND ${accountAllowedSql('a.id')}`)
       .bind(tokenHash, timestamp(now)).first();
     if (!row) return null;
-    return { userId: row.account_id, provider: row.provider, linkedProviders: await linkedProviders(db, row.account_id), sessionHash: tokenHash };
+    return { userId: row.account_id, provider: row.provider, linkedProviders: await linkedProviders(db, row.account_id), sessionHash: tokenHash, sessionCreatedAt: row.created_at };
   }
   const userId = sitesIdentity(sitesUserId);
   if (!userId) return null;
   const account = await db.prepare('SELECT disabled_at FROM auth_accounts WHERE id = ?').bind(userId).first();
   if (account && account.disabled_at !== null) return null;
+  const permitted = await db.prepare(`SELECT ${accountAllowedSql('candidate.id')} AS allowed FROM (SELECT ? AS id) candidate`).bind(userId).first();
+  if (!permitted?.allowed) return null;
   const testerEmail = credential(env, 'HARU_SITES_TESTER_EMAIL');
   const privateTester = testerEmail && typeof sitesEmail === 'string' && sitesEmail.trim().toLowerCase() === testerEmail.trim().toLowerCase();
   if (!account && !privateTester && env?.HARU_REGISTRATION_OPEN !== 'true' &&
@@ -431,7 +434,9 @@ async function start(request, provider, options) {
   const at = timestamp(now);
   await cleanup(db, at);
   if (body.intent === 'link') {
-    await db.prepare('INSERT INTO auth_accounts (id, created_at) VALUES (?, ?) ON CONFLICT(id) DO NOTHING').bind(account.userId, at).run();
+    await db.prepare(`INSERT INTO auth_accounts (id, created_at)
+      SELECT candidate.id, ? FROM (SELECT ? AS id) candidate WHERE ${accountAllowedSql('candidate.id')}
+      ON CONFLICT(id) DO NOTHING`).bind(at, account.userId).run();
   }
   const state = randomToken();
   const binding = randomToken();
@@ -448,14 +453,19 @@ async function start(request, provider, options) {
         AND token_hash != ?`).bind(at, oldHash, account?.sessionHash || ''),
     ]);
   }
+  const linkGate = body.intent === 'link'
+    ? `AND EXISTS (SELECT 1 FROM auth_accounts a WHERE a.id = ? AND ${accountAllowedSql('a.id')})
+      ${account.sessionHash ? 'AND EXISTS (SELECT 1 FROM auth_sessions s WHERE s.token_hash = ? AND s.account_id = ? AND s.revoked_at IS NULL AND s.expires_at > ?)' : ''}` : '';
+  const linkValues = body.intent === 'link' ? [account.userId,
+    ...(account.sessionHash ? [account.sessionHash, account.userId, at] : [])] : [];
   const inserted = await db.prepare(`INSERT INTO auth_oauth_transactions
     (state_hash, binding_hash, provider, audience, intent, account_id, context_hash, nonce_hash, code_verifier, created_at, expires_at)
     SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-    WHERE (SELECT COUNT(*) FROM auth_oauth_transactions) < ?
+    WHERE (SELECT COUNT(*) FROM auth_oauth_transactions) < ? ${linkGate}
     RETURNING state_hash`).bind(
       await digest(state), await digest(binding), provider.id, provider.clientId, body.intent,
       body.intent === 'link' ? account.userId : null, await contextHash(request, sitesUserId),
-      await digest(nonce), verifier, at, at + AUTH_LIMITS.flowMs, AUTH_LIMITS.liveFlows,
+      await digest(nonce), verifier, at, at + AUTH_LIMITS.flowMs, AUTH_LIMITS.liveFlows, ...linkValues,
     ).first();
   if (!inserted) throw new AuthError(429, 'RATE_LIMITED', 'too_many_requests', 60);
   const url = new URL(provider.authorize);
@@ -490,7 +500,7 @@ async function linkIdentity(request, identity, flow, options) {
   if (account.sessionHash) values.push(account.sessionHash, account.userId, at);
   const committed = await db.batch([db.prepare(`INSERT INTO auth_identities (id, account_id, provider, issuer, audience, subject, linked_at)
     SELECT ?, ?, ?, ?, ?, ?, ?
-    WHERE EXISTS (SELECT 1 FROM auth_accounts a WHERE a.id = ? AND a.disabled_at IS NULL)
+    WHERE EXISTS (SELECT 1 FROM auth_accounts a WHERE a.id = ? AND a.disabled_at IS NULL AND ${accountAllowedSql('a.id')})
       AND NOT EXISTS (SELECT 1 FROM auth_identities WHERE ${IDENTITY_WHERE})
       AND NOT EXISTS (SELECT 1 FROM auth_identities WHERE account_id = ? AND provider = ?)
       AND EXISTS (SELECT 1 FROM auth_oauth_transactions WHERE state_hash = ? AND claim_token = ? AND expires_at > ?)
@@ -535,7 +545,7 @@ async function createSession(identity, flow, options) {
     .bind(...tuple, AUTH_LIMITS.sessionsPerAccount - 1, ...proof));
   statements.push(db.prepare(`INSERT INTO auth_sessions (token_hash, binding_hash, account_id, provider, created_at, expires_at)
     SELECT ?, ?, i.account_id, ?, ?, ? FROM auth_identities i JOIN auth_accounts a ON a.id = i.account_id
-    WHERE i.provider = ? AND i.issuer = ? AND i.audience = ? AND i.subject = ? AND a.disabled_at IS NULL AND ${liveFlow}`)
+    WHERE i.provider = ? AND i.issuer = ? AND i.audience = ? AND i.subject = ? AND a.disabled_at IS NULL AND ${accountAllowedSql('a.id')} AND ${liveFlow}`)
     .bind(tokenHash, flow.binding_hash, identity.provider, at, at + AUTH_LIMITS.sessionMs, ...tuple, ...proof));
   statements.push(db.prepare(`DELETE FROM auth_oauth_transactions WHERE state_hash = ? AND claim_token = ? AND expires_at > ? RETURNING state_hash`).bind(...proof));
   const committed = await db.batch(statements);
@@ -621,12 +631,12 @@ async function endSession(request, options, resumeSites) {
  * required only for start/callback. fetch/clock/timeout injections are trusted
  * server-side dependencies used by SQL + signed-JWT integration tests.
  * @param {Request} request
- * @param {{action?: string, provider?: string, db?: import('@cloudflare/workers-types').D1Database, env?: any, sitesUserId?: string, sitesEmail?: string, now?: () => number, fetch?: typeof globalThis.fetch, timeoutMs?: number, sitesEnabled?: boolean}} [options]
+ * @param {{action?: string, provider?: string, db?: import('@cloudflare/workers-types').D1Database, env?: any, sitesUserId?: string, sitesEmail?: string, now?: () => number, fetch?: typeof globalThis.fetch, timeoutMs?: number, sitesEnabled?: boolean, loginEnabled?: boolean}} [options]
  * @returns {Promise<Response>}
  */
 export async function handleAuthRequest(request, {
   action, provider: providerId, db, env = {}, sitesUserId, sitesEmail, now = Date.now,
-  fetch: fetcher = globalThis.fetch, timeoutMs = AUTH_LIMITS.upstreamTimeoutMs, sitesEnabled = true,
+  fetch: fetcher = globalThis.fetch, timeoutMs = AUTH_LIMITS.upstreamTimeoutMs, sitesEnabled = true, loginEnabled = true,
 } = {}) {
   const definition = { status: 'GET', start: 'POST', callback: 'GET', logout: 'POST', 'sites-start': 'POST' };
   try {
@@ -659,12 +669,15 @@ export async function handleAuthRequest(request, {
         account: resolved ? { provider: resolved.provider, linkedProviders: resolved.linkedProviders } : null,
         providers: AUTH_PROVIDER_IDS.map(id => {
           const config = providerConfig(id, env);
-          return { id, name: config.name, enabled: config.enabled, reason: config.reason };
+          return { id, name: config.name, enabled: loginEnabled && config.enabled, reason: loginEnabled ? config.reason : 'admission_not_ready' };
         }),
         registration: {
           open: env.HARU_REGISTRATION_OPEN === 'true', ageTarget: '전체이용가 목표', minimumSignupAge: null, guardianReady: false,
         },
       });
+    }
+    if (!loginEnabled && (action === 'start' || action === 'callback')) {
+      throw new AuthError(503, 'AUTH_NOT_CONFIGURED', 'provider_disabled');
     }
     if (action === 'start') return await start(request, providerConfig(providerId, env), options);
     if (action === 'callback') return await callback(request, providerConfig(providerId, env), options);
@@ -674,4 +687,12 @@ export async function handleAuthRequest(request, {
     return json({ code: known ? error.code : 'SERVICE_UNAVAILABLE', message: known ? error.message : MESSAGES.SERVICE_UNAVAILABLE },
       known ? error.status : 503, [], known && error.retryAfter ? { 'Retry-After': error.retryAfter } : {});
   }
+}
+
+
+/** Trusted server-only resolver for account rights; no caller-supplied identity. */
+export async function resolvePrivacyIdentity(request, { db, env = {}, now = Date.now } = {}) {
+  const resolved = await resolveInternal(request, { db: usableDb(db), env, now });
+  if (!resolved?.sessionHash || !Number.isSafeInteger(resolved.sessionCreatedAt)) return null;
+  return { userId: resolved.userId, sessionHash: resolved.sessionHash, authenticatedAt: resolved.sessionCreatedAt, accountContext: await digest(`privacy:${resolved.sessionHash}`) };
 }

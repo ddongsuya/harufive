@@ -1,3 +1,4 @@
+import { handlePrivacyRequest } from './privacy-http.mjs';
 import { handleAuthRequest, resolveGameIdentity } from './auth-service.mjs';
 import { handleGameRequest, handleHealthRequest } from './http.mjs';
 
@@ -37,9 +38,11 @@ export async function handleStandaloneRequest(request, { db, env = {}, now = Dat
     const [first, second] = auth[1].split('/');
     return handleAuthRequest(request, {
       action: second || first, provider: second ? first : undefined,
-      db, env: settings, now, fetch, sitesEnabled: false,
+      db, env: settings, now, fetch, sitesEnabled: false, loginEnabled: false,
     });
   }
+  const privacy = /^\/api\/(privacy|guardian)\/([a-z]+)$/.exec(url.pathname);
+  if (privacy) return handlePrivacyRequest(request, { namespace: privacy[1], action: privacy[2], db, env: settings, now });
   const game = /^\/api\/game\/([a-z]+)$/.exec(url.pathname);
   if (game) {
     return handleGameRequest(request, {

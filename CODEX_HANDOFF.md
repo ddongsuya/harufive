@@ -12,10 +12,10 @@
 | 마지막 확인한 실제 서비스 | **소유자 비공개 v0.5.0** |
 | 기존 주소 | https://haru-five.limjm900202.chatgpt.site |
 | 기존 프로젝트 ID | `appgprj_6ad579bd9a3c81919fdd61e829a289a7` |
-| 로컬 기반 커밋 | `41e156127ab6d07666f566d24f66a4ef93949709` |
-| 마지막 원격 반영을 확인한 커밋 | `917062107b7faba9865af812c319c935b51ffcd8` |
+| 이전 Sites 로컬 기반 커밋 | `41e156127ab6d07666f566d24f66a4ef93949709` |
+| 이전 Sites 원격 반영을 확인한 커밋 | `917062107b7faba9865af812c319c935b51ffcd8` |
 | 이번 ZIP | 기반 커밋 이후의 미커밋 수정도 포함한 파일 스냅샷. `.git` 이력·원격 설정·운영 DB·실제 비밀키 미포함 |
-| 원격 저장·배포 | v0.5.1 미완료. 아래 차단 이력 참고 |
+| 원격 저장·배포 | 비공개 GitHub 업로드 완료: `main` 원본, `codex/local-standalone-foundation` 후속 개발 소스, Draft PR #1. 기존 Sites 업데이트·독립 호스팅 배포는 미완료. 7절의 과거 차단 이력과 11절의 최신 기록 참고 |
 
 **앱을 새로 만들어 시작할 필요는 없다.** 기존 캐릭터·화면·게임 서버·인증·테스트를 이어받는다. 이전 대화 전체나 외부 서비스 로그인 상태가 이 ZIP만으로 Codex에 자동 전달되었다고 전제하지 않는다.
 
@@ -156,12 +156,23 @@ B안에는 아동 대상 운영에 적합한 별도 호스팅이 필요하다. W
 
 PC에서는 ZIP을 풀고 `package.json`이 있는 `haru-five` 폴더를 Codex의 작업 폴더로 선택한 다음 `CODEX_START_PROMPT.txt`를 붙여 넣는다. CLI·IDE를 사용한다면 동일한 프로젝트 폴더를 작업 대상으로 연다. 구체적인 화면 구성은 사용하는 제품 버전의 [공식 시작 안내](https://learn.chatgpt.com/docs/quickstart)를 따른다.
 
-모바일에서 원격으로 이어가려면 먼저 웹·데스크톱에서 GitHub 저장소를 연결한 Codex Cloud 환경을 마련하는 방법이 있다. 원격 저장소는 현재 준비한 ZIP을 실제로 반영한 하루다섯 전용 저장소여야 하며, 다른 프로젝트나 오래된 원격 소스를 선택하지 않는다. 이번 작업은 새 GitHub 저장소를 만들거나 업로드하거나 Cloud 작업을 시작하지 않았다. [Codex Cloud 공식 안내](https://learn.chatgpt.com/docs/cloud)
+모바일에서 원격으로 이어가려면 먼저 웹·데스크톱에서 GitHub 저장소를 연결한 Codex Cloud 환경을 마련하는 방법이 있다. 원격 저장소는 현재 준비한 ZIP을 실제로 반영한 하루다섯 전용 저장소여야 하며, 다른 프로젝트나 오래된 원격 소스를 선택하지 않는다. 최초 ZIP 인수인계에서는 업로드하지 않았지만, 후속 작업에서 사용자가 지정한 비공개 [ddongsuya/harufive](https://github.com/ddongsuya/harufive)에 업로드했다. 최신 개발 소스는 `codex/local-standalone-foundation` 브랜치를 선택한다. Codex Cloud 환경 구성과 Cloud 작업 시작은 아직 하지 않았다. [Codex Cloud 공식 안내](https://learn.chatgpt.com/docs/cloud)
 
 ## 11. Codex 후속 작업 — 2026-10-20
 
 Windows + Node 24.13.0에서 원본 설치·156개 테스트·검사·빌드를 재현했다. Node 최소 버전 정리, 독립 인증 어댑터, 영속 로컬 SQLite와 로컬 미리보기, 독립 UI 경계를 추가한 뒤 **164개 테스트·타입 검사·기존 빌드 통과**를 확인했다. `npm run dev:local`로 127.0.0.1:5174를 열 수 있다. 실제 로그인과 어린이 가입을 흉내 내지 않으며 세 버튼은 준비 상태다.
 
-사용자가 GitHub `ddongsuya/harufive`를 개발 저장소로 지정했다. 원본을 로컬 main에 보존하고 작업 브랜치 `codex/local-standalone-foundation`에서 수정했다. 공개 저장소로의 README 업로드는 자동 승인 검토가 운영·보안 설명·연락처의 공개 범위 확인 부족을 이유로 거부해 실행되지 않았다. 다른 전송 경로로 우회하지 않았다. 원격은 아직 비어 있으며 공개할 소스·문서 범위를 사용자가 확인해야 한다.
+사용자가 GitHub `ddongsuya/harufive`를 개발 저장소로 지정했다. 원본을 로컬 main에 보존하고 작업 브랜치 `codex/local-standalone-foundation`에서 수정했다. 최초 공개 저장소로의 README 업로드는 자동 승인 검토가 운영·보안 설명·연락처의 공개 범위 확인 부족을 이유로 거부해 실행되지 않았다. 이후 사용자가 비공개 전환과 업로드를 승인했고, GitHub API에서 **Private** 상태를 확인한 뒤 정상 GitHub 연결 도구로 업로드했다. 이는 7절의 기존 Sites 배포 차단을 해제하거나 우회한 작업이 아니다.
+
+현재 [비공개 저장소](https://github.com/ddongsuya/harufive)의 `main`에는 인계 원본이, `codex/local-standalone-foundation`에는 검증한 후속 개발 소스가 있다. [Draft PR #1](https://github.com/ddongsuya/harufive/pull/1)을 생성했으며 아직 병합하지 않았다. 기존 서비스 변경·독립 호스팅 배포·실제 OAuth 설정은 완료하지 않았다.
+
+연결 도구가 파일 트리를 별도 커밋으로 가져와 로컬 Git 이력과 원격 이력의 커밋 ID가 다르다. 최초 업로드 시 다음 트리 일치를 확인했다. 아래 커밋은 이 문서 갱신 이전의 소스 업로드 기록이며, 이후 문서 커밋은 별도로 쌓인다.
+
+| 범위 | 로컬 커밋 | GitHub 커밋 | 동일한 파일 트리 |
+|---|---|---|---|
+| 인계 원본 `main` | `14dd5ae9944af24d82184e58a6a59563fdd3042c` | `472e92f601f2b95d10f818955dbdd6357e0c43fa` | `2520cb27568faa94829305cc581ba7745e6352d7` |
+| 후속 개발 소스 | `5ce001f27d98e49df0f4ec2b392506dcce14c29e` | `71b6b9f4097214091fc4774f3d040a4b0a92c74e` | `23ce4db74f6ec82c19dc44fb9b23ca8af4a27a81` |
+
+다음 작업은 원격 작업 브랜치의 이력을 기준으로 이어간다. 기존 로컬 이력으로 원격을 강제 push하거나 동일 파일이라는 이유로 이력 전체를 덮어쓰지 않는다. 로컬 보존 커밋에서 추가 작업했다면 원격의 최신 부모 커밋 위에 해당 변경만 반영하고 파일 트리를 검증한다.
 
 실제 변경·검증은 `docs/codex-verification-2026-10-20.md`, 실행은 `docs/local-development.md`, 보호자 동의·삭제의 다음 구현 순서는 `docs/guardian-implementation-plan.md`를 따른다. 독립 Worker 운영 진입점·호스팅 설정·보호자 서버 기능·외부 확인·예약 삭제는 다음 작업이며, `HARU_REGISTRATION_OPEN=false`, `guardianReady=false`를 유지한다.

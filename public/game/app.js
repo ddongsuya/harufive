@@ -6,16 +6,21 @@ import { REMINDER_STORAGE_KEY, freshReminder, normalizeReminder, validReminderTi
 import { createGameApi, createRequestId } from './api.js';
 import { SOCIAL_PROVIDERS, SITES_SIGN_IN, providerName, callbackNotice, createAuthApi } from './auth.js';
 
+import { createPrivacyApi } from './privacy.js';
+import { privacyPage, guardianPage } from './privacy-views.js';
+
 const SUPPORT_EMAIL = 'limjm900202@gmail.com';
 
 /** Start a game surface only after its React host confirms the mount is current. */
 export function mountGame(){
 const app=document.querySelector('#app'),modal=document.querySelector('#modal'),toastEl=document.querySelector('#toast');
-const VALID_VIEWS=['home','challenge','result','ranking','profile','shop'];
+const VALID_VIEWS=['home','challenge','result','ranking','profile','shop','privacy','guardian'];
 const MUTATION_ACTIONS=['daily','practice','answer','memory-start','buy','equip','character','buy-character','save-name','select'];
 let state=null,today=dateKey(),storageAvailable=true,connection='loading',connectionError='',signInUrl='/signin-with-chatgpt?return_to=%2F';
 const api=createGameApi();
 const authApi=createAuthApi();
+let privacyApi=createPrivacyApi(),privacyEpoch=0,privacyConfirmation=null,privacyModal=false;
+let privacy={loading:false,busy:false,status:null,children:[],hasMore:false,selected:null,error:'',notice:'',uncertain:false};
 let authStatus=null,authError='',authBusy=false,authPromise=null,logoutUnconfirmed=false,authNotice=callbackNotice(location.search||'');
 if(location.href&&location.search){
   const clean=new URL(location.href);
@@ -203,7 +208,7 @@ function connectionBanner(){
 }
 function entryView(){
   const login=connection==='signin';
-  return `<main class="release-entry" id="main"><div class="release-entry-brand">${brand()}</div><section class="card release-entry-card">${avatar({...DEFAULT_EQUIPPED,background:'transparent',pose:'happy'},'entry-avatar')}<span class="tag neutral">출시 준비 · 0.5.1</span><h1>${login?'작은 도전, 나만의 친구와.':connection==='error'?'잠깐, 연결을 확인해 주세요.':'나의 정원을 여는 중이에요.'}</h1><p>${login?'하루 다섯 문제를 풀고, 나의 기록과 도트 친구들을 모아요. 로그인하면 계정에 기록을 간직할 수 있어요.':connection==='error'?escape(connectionError):'로그인 상태와 저장된 기록을 확인하고 있어요.'}</p>${login?`${authFeedback()}${socialLoginOptions()}${authStatus?.sites.enabled?`<div class="login-divider"><span>개발 중인 게임 이어가기</span></div><a class="btn secondary full" data-action="auth-sites" href="${escape(SITES_SIGN_IN)}" target="_top" ${authBusy?'aria-disabled="true"':''}>ChatGPT 계정으로 시작하기 ${icon('arrow',true)}</a>`:''}<small>게임 이용은 무료예요. 구름토끼부터 함께해요.</small><button class="text-link" data-action="release-info">로그인 · 출시 준비 안내</button>`:connection==='error'?'<button class="btn full" data-action="sync">다시 연결하기</button>':'<div class="entry-loading" role="status">기록을 불러오고 있어요…</div>'}</section><p class="release-entry-foot">매일 5문제 · 주간 랭킹 · 나만의 도트 친구</p><div class="release-entry-contact">${supportContact()}</div></main>`;
+  return `<main class="release-entry" id="main"><div class="release-entry-brand">${brand()}</div><section class="card release-entry-card">${avatar({...DEFAULT_EQUIPPED,background:'transparent',pose:'happy'},'entry-avatar')}<span class="tag neutral">출시 준비 · 0.5.1</span><h1>${login?'작은 도전, 나만의 친구와.':connection==='error'?'잠깐, 연결을 확인해 주세요.':'나의 정원을 여는 중이에요.'}</h1><p>${login?'하루 다섯 문제를 풀고, 나의 기록과 도트 친구들을 모아요. 로그인하면 계정에 기록을 간직할 수 있어요.':connection==='error'?escape(connectionError):'로그인 상태와 저장된 기록을 확인하고 있어요.'}</p>${login?`${authFeedback()}${socialLoginOptions()}${authStatus?.sites.enabled?`<div class="login-divider"><span>개발 중인 게임 이어가기</span></div><a class="btn secondary full" data-action="auth-sites" href="${escape(SITES_SIGN_IN)}" target="_top" ${authBusy?'aria-disabled="true"':''}>ChatGPT 계정으로 시작하기 ${icon('arrow',true)}</a>`:''}<small>게임 이용은 무료예요. 구름토끼부터 함께해요.</small><button class="text-link" data-action="release-info">로그인 · 출시 준비 안내</button>`:connection==='error'?'<button class="btn full" data-action="sync">다시 연결하기</button>':'<div class="entry-loading" role="status">기록을 불러오고 있어요…</div>'}</section><p class="release-entry-foot">매일 5문제 · 주간 랭킹 · 나만의 도트 친구</p><nav class="privacy-entry-links" aria-label="보호자와 정보 관리"><button class="text-link" data-action="guardian-open">보호자 동의 안내</button><button class="text-link" data-action="privacy-open">나의 정보 관리</button></nav><div class="release-entry-contact">${supportContact()}</div></main>`;
 }
 function authFeedback(){
   const notice=authError?{kind:'error',text:authError}:authNotice;
@@ -221,7 +226,7 @@ async function syncAuth(){
   if(authPromise)return authPromise;
   authPromise=(async()=>{
     try{
-      const status=await authApi.status();if(disposed)return;authStatus=status;authError='';
+      const status=await authApi.status();if(disposed)return;authStatus=status;authError='';if(!status.authenticated)resetPrivacy();
       if(authNotice?.kind==='success'&&!status.authenticated)authNotice=null;
     }catch(error){if(!disposed)authError=error.message||'로그인 연결 상태를 확인하지 못했어요.';}
     finally{authPromise=null;if(!disposed)render();}
@@ -263,13 +268,15 @@ function releaseInfoDialog(){
   showModal('새 친구들을 맞이할 준비 중이에요.','간편 로그인과 정식 운영을 준비하고 있어요.',`<button class="btn full" data-action="close-modal">확인했어요</button>`,`<div class="info-lines"><div><strong>카카오 · Google · 네이버</strong>내 정보에서 로그인 수단을 연결하면 같은 게임 계정으로 이어서 이용할 수 있어요. 현재 연결 준비 중인 버튼은 아직 사용할 수 없어요.</div><div><strong>전체이용가를 목표로 해요</strong>게임물 등급이 확정되었다는 뜻은 아니에요. 만 14세 미만 어린이도 함께할 수 있도록 보호자 동의 절차를 준비하고 있어요.</div><div><strong>새 계정 가입은 준비 중이에요</strong>보호자 동의, 이용약관과 개인정보 안내, 탈퇴·삭제 절차를 갖춘 뒤 새 계정 가입을 열게요. 광고와 현금 결제는 아직 제공하지 않아요.</div><div><strong>기존 계정을 먼저 확인해 주세요</strong>다른 로그인으로 새 계정을 만들면 기록이 따로 생길 수 있어요. 사용하던 계정의 내 정보에서 로그인을 연결해 주세요.</div><div><strong>도움이 필요할 때</strong>게임 이용과 내 정보에 관한 문의는 아래 주소로 보내 주세요.${supportContact()}</div></div>`);
 }
 function clearPersonalState(error){
+  resetPrivacy();
+  const retainedView=['privacy','guardian'].includes(ui.view)?ui.view:'home';
   state=null;connection='signin';connectionError='';transaction=null;pending=false;
-  ui.selected=null;ui.result=null;ui.review=false;ui.view='home';ui.premiumPreview=false;
+  ui.selected=null;ui.result=null;ui.review=false;ui.view=retainedView;ui.premiumPreview=false;
   hiddenMemories.clear();memorySyncRequested.clear();modal.close();modal.innerHTML='';refreshGameModal=null;
   if(authStatus)authStatus={...authStatus,authenticated:false,account:null};
   const supplied=error?.signInUrl;
   signInUrl=typeof supplied==='string'&&supplied.startsWith('/signin-with-chatgpt?')?supplied:'/signin-with-chatgpt?return_to=%2F';
-  history.replaceState(null,'','#home');sound.setScene('home');
+  history.replaceState(null,'','#'+ui.view);sound.setScene('home');
 }
 function applySnapshot(payload){
   const next=payload.state;
@@ -277,9 +284,9 @@ function applySnapshot(payload){
   const oldId=state?.playerId,oldActive=state?.active,oldQuestion=oldActive?`${oldActive.id}:${oldActive.currentQuestionId}`:'',previousDay=today;
   state={...next,equipped:{...DEFAULT_EQUIPPED,...next.equipped},practiceHistory:next.practiceHistory||[],practiceUsage:next.practiceUsage||{},awards:next.awards||{}};
   today=payload.today;connection='ready';
-  if(oldId&&oldId!==state.playerId){ui.selected=null;ui.result=null;ui.review=false;ui.view='home';ui.premiumPreview=false;hiddenMemories.clear();modal.close();modal.innerHTML='';refreshGameModal=null;transaction=null;}
+  if(oldId&&oldId!==state.playerId){resetPrivacy();ui.selected=null;ui.result=null;ui.review=false;ui.view='home';ui.premiumPreview=false;hiddenMemories.clear();modal.close();modal.innerHTML='';refreshGameModal=null;transaction=null;}
   if(oldQuestion!==memoryKey())ui.selected=null;
-  if(previousDay!==today){ui.selected=null;ui.result=null;ui.review=false;ui.view='home';modal.close();refreshGameModal=null;}
+  if(previousDay!==today){resetPrivacy();ui.selected=null;ui.result=null;ui.review=false;ui.view='home';modal.close();refreshGameModal=null;}
   if(ui.result?.mode==='daily')ui.result=state.results.find(r=>r.date===ui.result.date)||null;
   if(ui.result?.mode==='practice')ui.result=state.practiceHistory.find(r=>r.id===ui.result.id&&r.date===ui.result.date)||state.practiceHistory.find(r=>r.date===ui.result.date)||null;
   if(ui.view==='challenge'&&!state.active){const finished=oldActive?.mode==='practice'?state.practiceHistory.find(r=>r.date===oldActive.date):dailyResult();ui.result=finished||null;ui.view=finished?'result':'home';}
@@ -321,18 +328,19 @@ function refreshRetryControls(){
 function render(){
   if(disposed)return;
   const focused=captureFocus();clearInterval(memoryTimer);clearInterval(elapsedTimer);memoryTimer=null;elapsedTimer=null;
-  if(!state){app.innerHTML=entryView();drawCanvases(app);refreshRetryControls();document.title='하루다섯 · 매일 다섯 문제';return;}
+  if(!state){app.innerHTML=['privacy','guardian'].includes(ui.view)?publicPrivacyShell(ui.view==='guardian'?guardianPage():privacySurface()):entryView();drawCanvases(app);refreshRetryControls();document.title='하루다섯 · 매일 다섯 문제';return;}
   redactExpiredMemory();
-  const views={home:homeView,challenge:challengeView,result:resultView,ranking:rankingView,profile:profileView,shop:shopView};
+  const views={home:homeView,challenge:challengeView,result:resultView,ranking:rankingView,profile:profileView,shop:shopView,privacy:privacySurface,guardian:guardianPage};
   app.innerHTML=shell((views[ui.view]||homeView)());drawCanvases(app);setRequestControls();
   sound.setScene(ui.view==='challenge'?'challenge':ui.view==='result'?'result':ui.view==='shop'?'shop':'home');
   armMemoryTimer();armElapsedTimer();restoreFocus(focused);
-  document.title=(ui.view==='home'?'매일 다섯 문제':{challenge:'오늘의 도전',result:'도전 결과',ranking:'주간 랭킹',profile:'내 정보',shop:'캐릭터 꾸미기'}[ui.view])+' · 하루다섯';
+  document.title=(ui.view==='home'?'매일 다섯 문제':{challenge:'오늘의 도전',result:'도전 결과',ranking:'주간 랭킹',profile:'내 정보',shop:'캐릭터 꾸미기',privacy:'나의 정보 관리',guardian:'보호자 동의 안내'}[ui.view])+' · 하루다섯';
 }
 function go(view){
-  if(!state){render();return;}
-  if(view==='challenge'){void startDaily();return;}
-  ui.view=VALID_VIEWS.includes(view)?view:'home';render();history.replaceState(null,'','#'+ui.view);
+  const next=VALID_VIEWS.includes(view)?view:'home';
+  if(ui.view!==next){resetPrivacy();}
+  if(view==='challenge'&&state){void startDaily();return;}
+  ui.view=!state&&!['privacy','guardian'].includes(next)?'home':next;render();history.replaceState(null,'','#'+ui.view);
   window.scrollTo({top:0,behavior:'instant'});document.querySelector('#main')?.focus({preventScroll:true});
 }
 function toast(message){if(disposed)return;clearTimeout(toastTimer);toastEl.textContent=message;toastEl.classList.add('show');toastTimer=setTimeout(()=>toastEl.classList.remove('show'),3500);}
@@ -433,17 +441,127 @@ function accountCard(){
   return `<section class="card record-history account-records"><div class="between"><div><h3>계정과 저장된 기록</h3><p class="account-caption">같은 계정으로 다른 기기에서도 이어서 이용해요.</p></div><button class="text-link" data-action="auth-logout" ${authBusy?'disabled':''}>로그아웃</button></div><div class="account-login-heading"><strong>로그인 연결</strong><span class="tag neutral">${current?escape(providerName(current))+'로 이용 중':'연결 확인 중'}</span></div><p class="account-caption">자주 쓰는 로그인을 추가하고 같은 친구와 기록을 만나요.</p><div class="account-login-list">${SOCIAL_PROVIDERS.map(provider=>{
     const isLinked=linked.includes(provider.id),enabled=authStatus?.providers.find(item=>item.id===provider.id)?.enabled===true;
     return `<div class="account-login-row"><div><strong>${provider.name}</strong><small>${isLinked?'이 게임 계정에 연결했어요.':enabled?'지금의 게임 계정에 추가할 수 있어요.':authError?'연결 상태를 다시 확인해 주세요.':'간편 로그인 연결을 준비하고 있어요.'}</small></div><button class="btn secondary small" data-action="auth-link" data-provider="${provider.id}" ${isLinked||!enabled||authBusy?'disabled':''}>${isLinked?'연결됨':enabled?'연결하기':authStatus?'준비 중':'확인 중'}</button></div>`;
-  }).join('')}</div><p class="account-caption">다른 계정에 연결된 로그인은 자동으로 합쳐지지 않아요. 사용하던 계정에서 연결해 주세요.</p><div class="account-login-actions">${authError?'<button class="text-link" data-action="auth-refresh">연결 다시 확인</button>':''}<button class="text-link" data-action="release-info">로그인 · 출시 준비 안내</button>${supportContact()}</div><div class="account-data-download"><button class="btn secondary" data-action="export-server">${icon('book',true)} 내 서비스 기록 다운로드</button><p class="account-caption">서비스 기록 파일에는 나의 게임 정보가 담겨 있어요. 다운로드한 파일은 안전하게 보관해 주세요.</p></div>${legacyRecord?`<div class="legacy-record"><strong>이 브라우저의 이전 테스트 기록</strong><p>${escape(legacyRecord.name)} · 공식 도전 ${fmt(legacyRecord.dailyCount)}일 · ${fmt(legacyRecord.coins)} 테스트 코인 · 친구 ${fmt(legacyRecord.friends)}종</p><p>이전 파일을 그대로 보관하고 있어요. 계정의 점수·코인과 합산하지 않아요.</p><button class="text-link" data-action="export-legacy">이전 테스트 기록 JSON 받기 ${icon('arrow',true)}</button></div>`:''}</section>`;
+  }).join('')}</div><p class="account-caption">다른 계정에 연결된 로그인은 자동으로 합쳐지지 않아요. 사용하던 계정에서 연결해 주세요.</p><div class="account-login-actions">${authError?'<button class="text-link" data-action="auth-refresh">연결 다시 확인</button>':''}<button class="text-link" data-action="release-info">로그인 · 출시 준비 안내</button>${supportContact()}</div><div class="privacy-account-links"><button class="btn secondary" data-action="privacy-open">${icon('shield',true)} 나의 정보 관리</button><button class="text-link" data-action="guardian-open">보호자 동의 안내</button></div><div class="account-data-download"><button class="btn secondary" data-action="export-server">${icon('book',true)} 내 서비스 기록 다운로드</button><p class="account-caption">서비스 기록 파일에는 나의 게임 정보가 담겨 있어요. 다운로드한 파일은 안전하게 보관해 주세요.</p></div>${legacyRecord?`<div class="legacy-record"><strong>이 브라우저의 이전 테스트 기록</strong><p>${escape(legacyRecord.name)} · 공식 도전 ${fmt(legacyRecord.dailyCount)}일 · ${fmt(legacyRecord.coins)} 테스트 코인 · 친구 ${fmt(legacyRecord.friends)}종</p><p>이전 파일을 그대로 보관하고 있어요. 계정의 점수·코인과 합산하지 않아요.</p><button class="text-link" data-action="export-legacy">이전 테스트 기록 JSON 받기 ${icon('arrow',true)}</button></div>`:''}</section>`;
 }
+function resetPrivacy(){
+  privacyApi.destroy();privacyApi=createPrivacyApi();privacyEpoch++;
+  privacy={loading:false,busy:false,status:null,children:[],hasMore:false,selected:null,error:'',notice:'',uncertain:false};
+  privacyConfirmation=null;
+  if(privacyModal){modal.close();modal.innerHTML='';refreshGameModal=null;privacyModal=false;}
+}
+function privacyCurrent(epoch,owner){return !disposed&&epoch===privacyEpoch&&ui.view==='privacy'&&state?.playerId===owner&&authStatus?.authenticated!==false&&!logoutUnconfirmed;}
+function privacyMessage(error){
+  if(error.code==='REAUTH_REQUIRED')return '정보 관리를 위해 다시 로그인해 주세요. 로그인 연결이 준비 중이면 운영 문의를 이용해 주세요.';
+  if(error.code==='ACCOUNT_CHANGED'||error.code==='STALE_PRIVACY_RESPONSE')return '로그인한 계정이 바뀌었어요. 현재 계정을 확인한 뒤 화면을 다시 열어 주세요.';
+  if(error.status===404||error.status===503||error.code==='AUTH_NOT_CONFIGURED')return '이 환경의 정보 관리 연결을 준비하고 있어요. 도움이 필요하면 운영 문의를 이용해 주세요.';
+  if(error.status===403)return '현재 계정의 정보 관리 권한을 다시 확인해 주세요.';
+  return error.message||'정보를 확인하지 못했어요. 연결 후 다시 확인해 주세요.';
+}
+function privacyFailure(error,{uncertain=false}={}){
+  const message=privacyMessage(error);
+  if(error.status===401&&error.code!=='REAUTH_REQUIRED'){clearPersonalState(error);ui.view='privacy';history.replaceState(null,'','#privacy');privacy.error=message;return;}
+  const keep=uncertain&&privacy.selected?privacy.children.find(child=>child.childAccountId===privacy.selected):null;
+  resetPrivacy();privacy.error=message;privacy.uncertain=uncertain;
+  if(keep){privacy.children=[keep];privacy.selected=keep.childAccountId;}
+}
+async function openPrivacy(){
+  modal.close();refreshGameModal=null;go('privacy');await loadPrivacy();
+}
+async function loadPrivacy(){
+  if(disposed||ui.view!=='privacy'||!state||authBusy||logoutUnconfirmed)return;
+  const selected=privacy.selected;
+  resetPrivacy();privacy.loading=true;
+  const epoch=privacyEpoch,owner=state.playerId;
+  render();
+  try{
+    const status=await privacyApi.status();if(!privacyCurrent(epoch,owner))return;
+    if(status.playerId!==owner)throw Object.assign(new Error('계정이 바뀌었어요.'),{code:'ACCOUNT_CHANGED',status:409});
+    const children=status.capabilities.childManagement?await privacyApi.children():{children:[],hasMore:false};
+    if(!privacyCurrent(epoch,owner))return;
+    privacy.status=status;privacy.children=children.children;privacy.hasMore=children.hasMore;
+    privacy.selected=children.children.some(child=>child.childAccountId===selected)?selected:null;
+  }catch(error){if(privacyCurrent(epoch,owner)){privacyFailure(error);render();}}
+  finally{if(privacyCurrent(epoch,owner)){privacy.loading=false;render();}}
+}
+function selectedPrivacyChild(){return privacy.children.find(child=>child.childAccountId===privacy.selected)||null;}
+async function refreshPrivacyContext(context,epoch,owner){
+  const status=await privacyApi.status();
+  if(!privacyCurrent(epoch,owner))return false;
+  if(status.accountContext!==context||status.playerId!==owner)throw Object.assign(new Error('계정이 바뀌었어요.'),{code:'ACCOUNT_CHANGED',status:409});
+  const children=status.capabilities.childManagement?await privacyApi.children():{children:[],hasMore:false};
+  if(!privacyCurrent(epoch,owner))return false;
+  privacy.status=status;privacy.children=children.children;privacy.hasMore=children.hasMore;
+  if(!children.children.some(child=>child.childAccountId===privacy.selected))privacy.selected=null;
+  return true;
+}
+async function exportPrivacy(target){
+  if(!state||privacy.busy||privacy.loading||privacy.uncertain||!privacy.status||authBusy||!['self','child'].includes(target))return;
+  const child=target==='child'?selectedPrivacyChild():null;
+  if(target==='child'&&(!child||!privacy.status.capabilities.childManagement))return;
+  if(target==='self'&&!privacy.status.capabilities.selfExport)return;
+  const context=privacy.status.accountContext,epoch=privacyEpoch,owner=state.playerId,selection=privacy.selected;
+  privacy.busy=true;privacy.error='';render();
+  try{
+    const data=await privacyApi.exportData({accountContext:context,...(child?{childAccountId:child.childAccountId}:{})});
+    if(!privacyCurrent(epoch,owner)||selection!==privacy.selected)return;
+    if(!await refreshPrivacyContext(context,epoch,owner))return;
+    if(child&&!privacy.children.some(item=>item.childAccountId===child.childAccountId))return;
+    downloadJson(data,`haru-five-${child?'child-':'my-'}records-${today}.json`);
+    privacy.notice='기록 파일을 준비했어요. 받은 파일은 안전하게 보관해 주세요.';
+  }catch(error){if(privacyCurrent(epoch,owner)){privacyFailure(error);render();}}
+  finally{if(privacyCurrent(epoch,owner)){privacy.busy=false;render();}}
+}
+function confirmPrivacy(operation){
+  const child=selectedPrivacyChild();
+  if(!state||!child||privacy.busy||privacy.loading||privacy.uncertain||!privacy.status?.capabilities.childManagement)return;
+  if(operation==='withdraw'&&child.state!=='active')return;
+  if(operation==='delete'&&!['active','withdrawn'].includes(child.state))return;
+  if(!['withdraw','delete'].includes(operation))return;
+  privacyConfirmation={operation,childAccountId:child.childAccountId,context:privacy.status.accountContext,epoch:privacyEpoch,owner:state.playerId};
+  privacyModal=true;
+  const deleting=operation==='delete';
+  showModal(deleting?'어린이의 기록 삭제를 요청할까요?':'어린이의 동의를 철회할까요?',
+    `<strong>${escape(child.label)}</strong> 계정에 적용돼요.`,
+    `<button class="btn ghost" data-action="close-modal">취소</button><button class="btn privacy-danger" data-action="privacy-confirm" data-operation="${operation}">${deleting?'삭제 요청 접수':'동의 철회하기'}</button>`,
+    `<div class="privacy-notice warning"><p>${deleting?'게임 이용을 중단하고 기록 삭제를 요청해요. 접수 즉시 모든 자료가 삭제되는 것은 아니며 처리 상태를 따로 확인해야 해요.':'게임 이용과 새 기록 저장이 중단돼요. 보호자는 기록을 내려받거나 삭제를 요청할 수 있어요.'}</p><p>진행 전에 필요한 기록을 다운로드해 주세요. 현재 화면에서 취소하거나 이용을 다시 시작할 수는 없어요.</p></div>`);
+}
+async function commitPrivacy(operation){
+  const proof=privacyConfirmation;
+  if(!proof||proof.operation!==operation||!privacyCurrent(proof.epoch,proof.owner)||privacy.busy||privacy.selected!==proof.childAccountId||privacy.status?.accountContext!==proof.context)return;
+  privacyConfirmation=null;privacyModal=false;modal.close();modal.innerHTML='';refreshGameModal=null;
+  privacy.busy=true;privacy.error='';privacy.notice='';render();
+  try{
+    const input={accountContext:proof.context,childAccountId:proof.childAccountId};
+    const result=operation==='delete'?await privacyApi.requestDeletion(input):await privacyApi.withdraw(input);
+    if(!privacyCurrent(proof.epoch,proof.owner))return;
+    if(!await refreshPrivacyContext(proof.context,proof.epoch,proof.owner))return;
+    privacy.notice=operation==='delete'?'삭제 요청을 접수했어요. 자료 삭제가 완료된 상태는 아니에요.':'동의를 철회했어요. 게임 이용이 중단됐으며 보호자는 기록을 계속 관리할 수 있어요.';
+    if(result.state==='deleted')privacy.notice='현재 서비스 자료의 삭제 상태를 확인했어요. 백업 등 나머지 처리 범위는 운영 문의로 확인해 주세요.';
+  }catch(error){if(privacyCurrent(proof.epoch,proof.owner))privacyFailure(error,{uncertain:error.status===0||error.status>=500||['PRIVACY_TIMEOUT','PRIVACY_NETWORK_ERROR','INVALID_PRIVACY_RESPONSE'].includes(error.code)});}
+  finally{if(privacyCurrent(proof.epoch,proof.owner)){privacy.busy=false;render();}else if(!disposed&&ui.view==='privacy')render();}
+}
+function privacySurface(){
+  return privacyPage({signedIn:!!state&&authStatus?.authenticated!==false,...privacy});
+}
+function publicPrivacyShell(content){
+  return `<main id="main" class="privacy-public" tabindex="-1"><div class="privacy-public-brand">${brand()}</div>${content}</main>`;
+}
+async function refreshFocusedSession(){
+  if(document.hidden||disposed)return;
+  if(ui.view==='privacy'){resetPrivacy();render();}
+  await Promise.allSettled([syncState(),syncAuth()]);
+  if(ui.view==='privacy'&&state)await loadPrivacy();
+}
+
 function downloadJson(data,filename,raw=false){
   const blob=new Blob([raw?data:JSON.stringify(data,null,2)],{type:'application/json;charset=utf-8'}),url=URL.createObjectURL(blob),link=document.createElement('a');
   link.href=url;link.download=filename;document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),30000);
 }
 async function exportServer(){
-  if(ui.exporting)return;ui.exporting=true;
+  if(ui.exporting)return;ui.exporting=true;const owner=state?.playerId,epoch=privacyEpoch;
   const button=document.querySelector('[data-action="export-server"]');if(button){button.disabled=true;button.textContent='기록을 준비하고 있어요…';}
-  try{const data=await api.export();if(!disposed){if(!data.export)throw new Error('내보낼 기록을 확인하지 못했어요. 다시 시도해 주세요.');downloadJson(data.export,`haru-five-records-${today}.json`);}}
-  catch(error){if(error.status===401)clearPersonalState(error);else toast(error.message);}
+  try{const data=await api.export();if(!disposed&&state?.playerId===owner&&epoch===privacyEpoch&&!logoutUnconfirmed){if(!data.export)throw new Error('내보낼 기록을 확인하지 못했어요. 다시 시도해 주세요.');downloadJson(data.export,`haru-five-records-${today}.json`);}}
+  catch(error){if(!disposed&&epoch===privacyEpoch){if(error.status===401)clearPersonalState(error);else toast(error.message);}}
   finally{ui.exporting=false;render();}
 }
 
@@ -546,7 +664,16 @@ async function handleAction(event){
   if(a==='auth-refresh'){await syncAuth();return;}
   if(a==='auth-dismiss'){authError='';authNotice=null;render();return;}
   if(a==='release-info'){releaseInfoDialog();return;}
-  if(a==='close-modal'){modal.close();refreshGameModal=null;return;}
+  if(a==='privacy-open'){await openPrivacy();return;}
+  if(a==='guardian-open'){modal.close();refreshGameModal=null;go('guardian');return;}
+  if(a==='privacy-back'){go(state?'profile':'home');return;}
+  if(a==='privacy-refresh'){if(!privacy.busy)await loadPrivacy();return;}
+  if(a==='privacy-child'){if(!privacy.busy&&privacy.children.some(child=>child.childAccountId===button.dataset.child)){privacy.selected=button.dataset.child;privacy.notice='';render();}return;}
+  if(a==='privacy-export'){await exportPrivacy(button.dataset.target);return;}
+  if(a==='privacy-withdraw'||a==='privacy-delete'){confirmPrivacy(a==='privacy-delete'?'delete':'withdraw');return;}
+  if(a==='privacy-confirm'){await commitPrivacy(button.dataset.operation);return;}
+  if(a==='nav'&&!state){go(button.dataset.view);return;}
+  if(a==='close-modal'){privacyConfirmation=null;privacyModal=false;modal.close();modal.innerHTML='';refreshGameModal=null;return;}
   if(a==='sync'){await syncState();return;}
   if(a==='retry-request'){if(transaction)await runTransaction(transaction);return;}
   if(a==='sound'){if(!audioSettings.enabled)applyAudioSettings({enabled:true});wakeAudio();audioDialog();return;}
@@ -582,7 +709,7 @@ async function handleAction(event){
   if(a==='memory-start'){await startMemory();return;}
   if(a==='practice'){await practiceOffer();return;}
   if(a==='resume-active'){if(state.active)showAttempt();return;}
-  if(a==='close-modal'){modal.close();refreshGameModal=null;return;}
+  if(a==='close-modal'){privacyConfirmation=null;privacyModal=false;modal.close();modal.innerHTML='';refreshGameModal=null;return;}
   if(a==='modal-shop'){modal.close();go('shop');return;}
   if(a==='greet'){clearTimeout(celebrationTimer);ui.avatarHappy=true;const canvas=button.querySelector('canvas');if(canvas)drawAvatar(canvas,{...state.equipped,background:'garden',pose:'happy',scale:2});toast('반가워요! 오늘도 함께 다섯 문제.');playSound('greet');celebrationTimer=setTimeout(()=>{ui.avatarHappy=false;if(ui.view==='home')render();},1500);return;}
   if(a==='review'){ui.review=true;render();requestAnimationFrame(()=>document.querySelector('#answer-review')?.scrollIntoView({behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'instant':'smooth',block:'start'}));return;}
@@ -612,17 +739,19 @@ const listeners=[];
 function listen(target,event,handler){target.addEventListener(event,handler);listeners.push(()=>target.removeEventListener(event,handler));}
 listen(app,'click',handleAction);listen(modal,'click',handleAction);
 listen(modal,'input',event=>{const kind=event.target.dataset?.audioVolume;if(!['musicVolume','effectsVolume'].includes(kind))return;const percent=Number(event.target.value);if(!Number.isFinite(percent))return;applyAudioSettings({[kind]:Math.max(0,Math.min(100,percent))/100});if(audioSettings.enabled)wakeAudio();});
-listen(modal,'click',event=>{if(event.target===modal){const rect=modal.getBoundingClientRect();if(event.clientX<rect.left||event.clientX>rect.right||event.clientY<rect.top||event.clientY>rect.bottom){modal.close();refreshGameModal=null;}}});
-listen(window,'hashchange',()=>{const view=location.hash.slice(1);if(VALID_VIEWS.includes(view))go(view);});
+function dismissModal(){privacyConfirmation=null;privacyModal=false;modal.close();modal.innerHTML='';refreshGameModal=null;}
+listen(modal,'cancel',event=>{event.preventDefault();dismissModal();});
+listen(modal,'click',event=>{if(event.target===modal){const rect=modal.getBoundingClientRect();if(event.clientX<rect.left||event.clientX>rect.right||event.clientY<rect.top||event.clientY>rect.bottom)dismissModal();}});
+listen(window,'hashchange',()=>{const view=location.hash.slice(1);if(VALID_VIEWS.includes(view)){go(view);if(view==='privacy')void loadPrivacy();}});
 listen(window,'storage',event=>{
   if(event.key===STORAGE_KEY){legacyRecord=readLegacy();if(ui.view==='profile')render();}
   if(event.key===REMINDER_STORAGE_KEY){reminder=readReminder();render();}
   if(event.key===AUDIO_STORAGE_KEY){audioSettings=readAudioSettings();sound.setSettings(audioSettings);refreshAudioUI(sound.getStatus());}
 });
-listen(document,'visibilitychange',()=>{sound.setHidden(document.hidden);if(!document.hidden)return syncState();else redactExpiredMemory();});
-listen(window,'focus',()=>{if(!document.hidden)return Promise.allSettled([syncState(),syncAuth()]);});
-listen(window,'pagehide',()=>sound.setHidden(true));
-listen(window,'pageshow',()=>{sound.setHidden(document.hidden);return syncState();});
+listen(document,'visibilitychange',()=>{sound.setHidden(document.hidden);if(!document.hidden)return refreshFocusedSession();else{resetPrivacy();if(ui.view==='privacy')render();redactExpiredMemory();}});
+listen(window,'focus',refreshFocusedSession);
+listen(window,'pagehide',()=>{sound.setHidden(true);resetPrivacy();if(ui.view==='privacy')render();});
+listen(window,'pageshow',()=>{sound.setHidden(document.hidden);return refreshFocusedSession();});
 const dateTimer=setInterval(()=>{if(state&&!document.hidden&&dateKey(new Date(api.now()))!==today)void syncState();},30000);
 const retryTimer=setInterval(refreshRetryControls,1000);
 function destroy(){
@@ -630,10 +759,10 @@ function destroy(){
   disposed=true;for(const remove of listeners)remove();
   for(const timer of [memoryTimer,elapsedTimer,dateTimer,retryTimer])clearInterval(timer);
   for(const timer of [toastTimer,celebrationTimer])clearTimeout(timer);
-  sound.setHidden(true);sound.dispose();authApi.destroy();state=null;transaction=null;modal.close();
+  sound.setHidden(true);sound.dispose();authApi.destroy();privacyApi.destroy();privacyEpoch++;privacyConfirmation=null;state=null;transaction=null;modal.close();
 }
 render();
-const ready=Promise.allSettled([syncState(),syncAuth()]);
+const ready=Promise.allSettled([syncState(),syncAuth()]).then(async()=>{if(!disposed&&ui.view==='privacy'&&state)await loadPrivacy();});
 return {destroy,ready};
 
 

@@ -6,6 +6,7 @@ import { createGameService } from '../server/game-service.mjs';
 import { handleStandaloneRequest } from '../server/standalone-http.mjs';
 import { AUTH_COOKIES } from '../server/auth-service.mjs';
 import { PRIVACY_LIMITS } from '../server/privacy-http.mjs';
+import { createAccountLifecycle } from '../server/account-lifecycle.mjs';
 
 const ORIGIN = 'https://haru-five.example.test';
 const START = Date.parse('2026-10-20T09:00:00+09:00');
@@ -68,6 +69,11 @@ function fixture(t) {
       assert.equal(response.status, 200, await response.clone().text());
       return (await response.json()).accountContext;
     },
+    async list(pathname, session, context) {
+      return f.call(pathname, {
+        headers: { ...session.headers, 'X-Haru-Account': context ?? await f.context(session) },
+      });
+    },
     post(action, session, context, body = {}, namespace = 'privacy', options = {}) {
       return f.call(`/api/${namespace}/${action}`, {
         method: 'POST', body,
@@ -107,6 +113,7 @@ test('privacy endpoints reject unauthenticated, forged Sites and invalid opaque 
   for (const cookie of ['', `${AUTH_COOKIES.session}=sites`, `${AUTH_COOKIES.session}=${'z'.repeat(43)}`]) {
     const headers = { ...forgedSites, Cookie: cookie, 'X-Haru-Account': 'client-supplied-context' };
     await expectCode(await f.call('/api/privacy/status', { headers }), 401, 'SIGN_IN_REQUIRED');
+    await expectCode(await f.call('/api/privacy/children', { headers }), 401, 'SIGN_IN_REQUIRED');
     await expectCode(await f.call('/api/privacy/export', { method: 'POST', body: {}, headers }), 401, 'SIGN_IN_REQUIRED');
     await expectCode(await f.call('/api/guardian/requests', { headers }), 401, 'SIGN_IN_REQUIRED');
   }
@@ -122,6 +129,7 @@ test('expired and fifteen-minute-old sessions cannot use privacy rights', async 
   const future = f.session('future', { createdAt: START + 1 });
   for (const [session, code] of [[expired, 'SIGN_IN_REQUIRED'], [stale, 'REAUTH_REQUIRED'], [future, 'REAUTH_REQUIRED']]) {
     await expectCode(await f.call('/api/privacy/status', { headers: session.headers }), 401, code);
+    await expectCode(await f.call('/api/privacy/children', { headers: session.headers }), 401, code);
     await expectCode(await f.post('export', session, 'old-context'), 401, code);
   }
   assert.equal(f.db.rows('SELECT * FROM game_rate_limits').length, 0);
@@ -136,14 +144,55 @@ test('privacy status exposes a session context and unready enrollment without cr
   assert.equal(response.status, 200);
   const body = await response.json();
   assert.match(body.accountContext, /^[a-f0-9]{64}$/);
+  assert.equal(body.playerId, null);
   assert.deepEqual(body.account, { state: 'active', deletion: null });
   assert.deepEqual(body.guardian, { guardianReady: false, providerConfigured: false, enrollmentOpen: false });
   assert.equal(body.selfRecoveryReady, false);
+  assert.deepEqual(body.capabilities, { selfExport: true, childManagement: true, selfClosure: false, guardianEnrollment: false });
   assert.doesNotMatch(JSON.stringify(body), /status-account|secret-binding|another-account/);
   assert.ok(!JSON.stringify(body).includes(session.token));
   assert.ok(!JSON.stringify(body).includes(session.hash));
   assert.equal(f.db.rows('SELECT * FROM game_players').length, 0);
 });
+
+test('privacy status identifies the current public game profile across an account cookie switch', async t => {
+  const f = fixture(t);
+  const first = f.session('profile-first');
+  const second = f.session('profile-second');
+  const firstGame = await f.game.bootstrap('profile-first');
+  const secondGame = await f.game.bootstrap('profile-second');
+  const firstStatus = await (await f.call('/api/privacy/status', { headers: first.headers })).json();
+  const secondStatus = await (await f.call('/api/privacy/status', { headers: second.headers })).json();
+  assert.equal(firstStatus.playerId, firstGame.state.playerId);
+  assert.equal(secondStatus.playerId, secondGame.state.playerId);
+  assert.notEqual(firstStatus.playerId, secondStatus.playerId);
+  assert.notEqual(firstStatus.accountContext, secondStatus.accountContext);
+  assert.doesNotMatch(JSON.stringify(secondStatus), /profile-first|profile-second|secret-binding/);
+});
+
+for (const invalidation of ['logout', 'withdrawn']) {
+  test(`privacy status rejects ${invalidation} before the final profile query without partial status data`, async t => {
+    const f = fixture(t);
+    const session = f.session('profile-race');
+    await f.game.bootstrap('profile-race');
+    let intervened = false;
+    f.db.beforeQuery = async ({ sql }) => {
+      if (!sql.includes('SELECT player.public_id')) return;
+      f.db.beforeQuery = null;
+      intervened = true;
+      if (invalidation === 'logout') {
+        assert.equal((await f.call('/api/auth/logout', { method: 'POST', body: {}, headers: session.headers })).status, 200);
+      } else {
+        f.db.sqlite.prepare("UPDATE privacy_account_controls SET state='withdrawn' WHERE account_id='profile-race'").run();
+      }
+    };
+    const response = await f.call('/api/privacy/status', { headers: session.headers });
+    const payload = await response.clone().text();
+    assert.equal(intervened, true);
+    await expectCode(response, 403, 'RIGHTS_UNAVAILABLE');
+    assert.doesNotMatch(payload, /playerId|accountContext|capabilities|profile-race/);
+  });
+}
 
 test('account switching and renewed-session contexts prevent stale-tab rights mutations', async t => {
   const f = fixture(t);
@@ -158,6 +207,53 @@ test('account switching and renewed-session contexts prevent stale-tab rights mu
   assert.ok(f.db.rows('SELECT state FROM privacy_account_controls').every(row => row.state === 'active'));
   assert.ok(f.db.rows('SELECT revoked_at FROM auth_sessions').every(row => row.revoked_at === null));
 });
+
+for (const pathname of ['/api/privacy/children', '/api/guardian/requests']) {
+  test(`${pathname} requires the established session context before reading another account's list`, async t => {
+    const f = fixture(t);
+    f.family('list-first-parent', 'list-first-child');
+    f.family('list-second-parent', 'list-second-child');
+    f.guardianRequest('list-first-parent');
+    f.guardianRequest('list-second-parent');
+    const first = f.session('list-first-parent');
+    const second = f.session('list-second-parent');
+    const firstContext = await f.context(first);
+    const firstResponse = await f.list(pathname, first, firstContext);
+    assert.equal(firstResponse.status, 200);
+    assert.match(await firstResponse.text(), /list-first-/);
+    const before = f.db.rows('SELECT * FROM game_rate_limits ORDER BY user_id');
+    let listReads = 0;
+    f.db.beforeQuery = ({ sql }) => {
+      if (sql.includes('FROM guardian_requests') || sql.includes('JOIN guardian_links child_link')) listReads++;
+    };
+    f.db.beforeBatch = statements => {
+      if (statements.some(statement => statement.sql.includes('JOIN guardian_links child_link'))) listReads++;
+    };
+    for (const headers of [
+      second.headers,
+      { ...second.headers, 'X-Haru-Account': firstContext },
+      { ...first.headers, 'X-Haru-Account': '' },
+      { ...first.headers, 'X-Haru-Account': 'not-a-context' },
+    ]) {
+      const response = await f.call(pathname, { headers });
+      const body = await response.clone().text();
+      await expectCode(response, 409, 'ACCOUNT_CHANGED');
+      assert.doesNotMatch(body, /list-first|list-second|children|requests|requestId|childAccountId/);
+    }
+    const renewed = f.session('list-first-parent');
+    await expectCode(await f.list(pathname, renewed, firstContext), 409, 'ACCOUNT_CHANGED');
+    assert.equal(listReads, 0, 'Stale or missing context must fail before any private list query');
+    assert.deepEqual(f.db.rows('SELECT * FROM game_rate_limits ORDER BY user_id'), before);
+    f.db.beforeQuery = null;
+    f.db.beforeBatch = null;
+    const secondContext = await f.context(second);
+    const secondResponse = await f.list(pathname, second, secondContext);
+    assert.equal(secondResponse.status, 200);
+    const secondPayload = await secondResponse.text();
+    assert.match(secondPayload, /list-second-/);
+    assert.doesNotMatch(secondPayload, /list-first-/);
+  });
+}
 
 test('privacy routes require a configured HTTPS origin and reject cross-site or missing-origin writes', async t => {
   const f = fixture(t);
@@ -333,6 +429,117 @@ test('another family cannot inspect, export, withdraw or delete a linked child',
   assert.equal(f.db.rows('SELECT withdrawn_at FROM guardian_consents WHERE child_account_id = ?', 'child-one')[0].withdrawn_at, null);
 });
 
+test('children lists only the verified guardian family with minimal labels and withdrawn or pending-deletion state', async t => {
+  const f = fixture(t);
+  f.family('list-parent', 'active-child');
+  f.family('list-parent', 'withdrawn-child');
+  f.family('list-parent', 'pending-child');
+  f.family('other-parent', 'other-child');
+  await f.game.bootstrap('active-child');
+  f.db.sqlite.prepare("UPDATE game_players SET name='별토끼' WHERE id='active-child'").run();
+  const session = f.session('list-parent');
+  const context = await f.context(session);
+  assert.equal((await f.post('withdraw', session, context, { childAccountId: 'withdrawn-child', confirmation: 'withdraw' })).status, 200);
+  assert.equal((await f.post('delete', session, context, { childAccountId: 'pending-child', confirmation: 'delete' })).status, 200);
+  const before = f.db.rows('SELECT id, coins, revision FROM game_players ORDER BY id');
+  const response = await f.list('/api/privacy/children', session, context);
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('Cache-Control'), 'private, no-store');
+  const body = await response.json();
+  assert.equal(body.hasMore, false);
+  assert.deepEqual(body.children, [
+    { childAccountId: 'active-child', label: '별토끼', state: 'active', deletion: null },
+    { childAccountId: 'pending-child', label: '연결된 어린이', state: 'deletion_pending',
+      deletion: { status: 'pending', requestedAt: START, completedAt: null } },
+    { childAccountId: 'withdrawn-child', label: '연결된 어린이', state: 'withdrawn', deletion: null },
+  ]);
+  assert.doesNotMatch(JSON.stringify(body), /other-child|other-parent|secret-|consent-|token|subject|proof|accountContext/);
+  assert.ok(!JSON.stringify(body).includes(session.hash));
+  assert.deepEqual(f.db.rows('SELECT id, coins, revision FROM game_players ORDER BY id'), before);
+  const other = f.session('other-parent');
+  const otherList = await (await f.list('/api/privacy/children', other)).json();
+  assert.deepEqual(otherList.children.map(child => child.childAccountId), ['other-child']);
+  const unrelated = f.session('no-family');
+  assert.deepEqual(await (await f.list('/api/privacy/children', unrelated)).json(), { children: [], hasMore: false });
+});
+
+test('purged children and restored stale family data stay absent from child lists behind a deletion marker', async t => {
+  const f = fixture(t);
+  f.family('purge-parent', 'purged-child');
+  await f.game.bootstrap('purged-child');
+  const session = f.session('purge-parent');
+  const context = await f.context(session);
+  await f.post('delete', session, context, { childAccountId: 'purged-child', confirmation: 'delete' });
+  const lifecycle = createAccountLifecycle({ db: f.db, now: f.now, purgePolicy: {
+    version: 1, policyId: 'test-list-purge-policy',
+    eraseGameAndAccountData: true, eraseGuardianEvidence: true, retainMinimalClosureRecords: true,
+    closureRetention: 'test marker retention', receiptRetention: 'test receipt retention',
+    backupReplayProcedure: 'test restored records are fenced by closure markers',
+  } });
+  assert.equal((await lifecycle.processDeletionJobs({})).processed, 1);
+  assert.deepEqual(await (await f.list('/api/privacy/children', session, context)).json(), { children: [], hasMore: false });
+  // Model stale live records restored before a backup closure marker is replayed:
+  // the already-present terminal marker must stop names/relations resurfacing.
+  f.family('purge-parent', 'purged-child');
+  f.db.sqlite.prepare(`INSERT INTO game_players
+    (id,public_id,name,coins,owned,equipped,created_day,created_at)
+    VALUES ('purged-child','old-public','삭제된 이름',180,'[]','{}','2026-10-20',?)`).run(START);
+  assert.equal(f.db.rows("SELECT state FROM privacy_account_controls WHERE account_id='purged-child'")[0].state, 'deleted');
+  assert.deepEqual(await (await f.list('/api/privacy/children', session, context)).json(), { children: [], hasMore: false });
+});
+
+test('children endpoint accepts only a same-origin GET without client-selected guardian or child identifiers', async t => {
+  const f = fixture(t);
+  const session = f.session('children-route-parent');
+  for (const query of ['?guardianId=victim', '?childAccountId=victim', '?limit=1000']) {
+    await expectCode(await f.call(`/api/privacy/children${query}`, { headers: session.headers }), 400, 'UNEXPECTED_FIELD');
+  }
+  await expectCode(await f.call('/api/privacy/children', {
+    headers: { ...session.headers, Origin: 'https://evil.example' },
+  }), 403, 'ORIGIN_REJECTED');
+  const response = await f.call('/api/privacy/children', { method: 'POST', body: {}, headers: session.headers });
+  assert.equal(response.status, 405);
+  assert.equal(response.headers.get('Allow'), 'GET');
+});
+
+for (const invalidation of ['logout', 'freshness', 'blocked']) {
+  test(`queued child list rejects ${invalidation} after HTTP authentication without exposing family data`, async t => {
+    const f = fixture(t);
+    f.family('queued-parent', 'queued-child');
+    const session = f.session('queued-parent');
+    let intervened = false;
+    f.db.beforeBatch = async statements => {
+      if (!statements.some(statement => statement.sql.includes('JOIN guardian_links child_link'))) return;
+      f.db.beforeBatch = null;
+      intervened = true;
+      if (invalidation === 'logout') {
+        assert.equal((await f.call('/api/auth/logout', { method: 'POST', body: {}, headers: session.headers })).status, 200);
+      } else if (invalidation === 'freshness') {
+        f.advance(PRIVACY_LIMITS.freshSessionMs);
+      } else {
+        f.db.sqlite.prepare("UPDATE privacy_account_controls SET state='withdrawn' WHERE account_id='queued-parent'").run();
+      }
+    };
+    const response = await f.list('/api/privacy/children', session);
+    assert.equal(intervened, true);
+    const payload = await response.clone().text();
+    await expectCode(response, 403, 'RIGHTS_UNAVAILABLE');
+    assert.doesNotMatch(payload, /queued-child|children|secret-|consent-/);
+  });
+}
+
+test('a relation removed before a queued child list is read cannot disclose its former child', async t => {
+  const f = fixture(t);
+  f.family('former-parent', 'former-child');
+  const session = f.session('former-parent');
+  f.db.beforeBatch = statements => {
+    if (!statements.some(statement => statement.sql.includes('JOIN guardian_links child_link'))) return;
+    f.db.beforeBatch = null;
+    f.db.sqlite.prepare("DELETE FROM guardian_links WHERE child_account_id='former-child'").run();
+  };
+  assert.deepEqual(await (await f.list('/api/privacy/children', session)).json(), { children: [], hasMore: false });
+});
+
 test('guardian routes list only owned requests, rotate and reject without exposing stored secrets', async t => {
   const f = fixture(t);
   const guardian = f.session('request-guardian');
@@ -340,7 +547,7 @@ test('guardian routes list only owned requests, rotate and reject without exposi
   const requestId = f.guardianRequest('request-guardian');
   f.guardianRequest('other-request-guardian');
   const context = await f.context(guardian);
-  const listed = await f.call('/api/guardian/requests', { headers: guardian.headers });
+  const listed = await f.list('/api/guardian/requests', guardian, context);
   assert.equal(listed.status, 200);
   const { requests } = await listed.json();
   assert.equal(requests.length, 1);

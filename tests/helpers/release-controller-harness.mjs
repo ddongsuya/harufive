@@ -4,11 +4,11 @@ import {auditMarkup} from './markup-source.mjs';
 // response objects. This exercises controller wiring, not browser layout/canvas.
 let instance=0;
 const decode=text=>String(text).replace(/&quot;/g,'"').replace(/&#39;/g,"'").replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&amp;/g,'&');
-export async function releaseHarness({handler,authHandler=null,legacy=null,hash='',search='',now=Date.parse('2026-10-20T00:00:00Z')}={}) {
+export async function releaseHarness({handler,authHandler=null,privacyHandler=null,legacy=null,hash='',search='',now=Date.parse('2026-10-20T00:00:00Z')}={}) {
   const keys=['document','window','location','history','localStorage','fetch','performance','setTimeout','clearTimeout','setInterval','clearInterval','requestAnimationFrame','matchMedia'];
   const originals=new Map(keys.map(key=>[key,Object.getOwnPropertyDescriptor(globalThis,key)]));
   let timerId=0,elapsed=0;
-  const intervals=new Map(),calls=[],writes=[],navigations=[],storage=new Map(legacy?[['haru-five-playtest-v1',legacy]]:[]);
+  const intervals=new Map(),calls=[],writes=[],navigations=[],downloads=[],storage=new Map(legacy?[['haru-five-playtest-v1',legacy]]:[]);
   const eventful=target=>Object.assign(target,{events:new Map(),addEventListener(name,fn){const list=this.events.get(name)||[];list.push(fn);this.events.set(name,list);},removeEventListener(name,fn){this.events.set(name,(this.events.get(name)||[]).filter(x=>x!==fn));},async fire(name,event={}){for(const fn of this.events.get(name)||[])await fn(event);}});
   class Element {
     constructor(tag='div',attrs={}){
@@ -37,7 +37,7 @@ export async function releaseHarness({handler,authHandler=null,legacy=null,hash=
     focus(){doc.activeElement=this;}
     select(){} scrollIntoView(){} showModal(){this.open=true;} close(){this.open=false;}
     getBoundingClientRect(){return {left:0,right:500,top:0,bottom:500};}
-    click(){if(this.tagName==='A'&&this.attrs.href)navigations.push({url:decode(this.attrs.href),target:this.attrs.target});} remove(){} appendChild(){}
+    click(){if(this.tagName!=='A')return;const url=this.href||this.attrs.href;if(!url)return;if(this.download!==undefined||'download' in this.attrs)downloads.push({url:decode(url),filename:this.download??this.attrs.download});else navigations.push({url:decode(url),target:this.target||this.attrs.target});} remove(){} appendChild(){}
   }
   const app=new Element('div',{id:'app'}),modal=new Element('dialog',{id:'modal'}),toast=new Element('div',{id:'toast'});
   const doc=eventful({hidden:false,activeElement:null,title:'',body:new Element('body'),
@@ -55,12 +55,13 @@ export async function releaseHarness({handler,authHandler=null,legacy=null,hash=
   assign('fetch',async(url,options)=>{
     const call={url,options,body:options.body?JSON.parse(options.body):null};calls.push(call);
     if(url.startsWith('/api/auth/'))return authHandler?authHandler(call,{now:now+elapsed}):reply({authenticated:true,sites:{enabled:true},account:{provider:'chatgpt',linkedProviders:[]},providers:['kakao','google','naver'].map(id=>({id,enabled:false,reason:'not_configured'})),registration:{open:false}});
+    if(privacyHandler&&(url.startsWith('/api/privacy/')||url.startsWith('/api/guardian/')))return privacyHandler(call,{now:now+elapsed});
     return handler(call,{now:now+elapsed});
   });
   let module;
   function restore(){module?.destroy();for(const [key,descriptor] of originals){if(descriptor)Object.defineProperty(globalThis,key,descriptor);else delete globalThis[key];}}
   try{const imported=await import(`../../public/game/app.js?release-test=${++instance}`);module=imported.mountGame();await module.ready;}catch(error){restore();throw error;}
-  return {app,modal,toast,document:doc,window:win,calls,writes,navigations,storage,
+  return {app,modal,toast,document:doc,window:win,calls,writes,navigations,downloads,storage,
     query:selector=>doc.querySelector(selector),
     async click(action,data={},inModal=false){const root=inModal?modal:app;const button=root.querySelectorAll('[data-action]').find(el=>el.dataset.action===action&&Object.entries(data).every(([key,value])=>el.dataset[key]===String(value)));if(!button)throw new Error(`Missing button ${action} ${JSON.stringify(data)}`);if(button.disabled)return false;await root.fire('click',{target:button});return true;},
     async focus(){await win.fire('focus');for(let i=0;i<16;i++)await Promise.resolve();},

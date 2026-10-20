@@ -1,6 +1,7 @@
-import { PrivacyError, guardianAuthoritySql, accountSessionSql } from './privacy-contract.mjs';
+import { PrivacyError, guardianAuthoritySql, accountSessionSql, accountAllowedSql } from './privacy-contract.mjs';
 
 const PAGE_LIMIT = 100;
+export const MANAGED_CHILD_LIMIT = 100;
 const ID = /^[^\u0000-\u001f\u007f]{1,200}$/;
 const noAccess = () => new PrivacyError(403, 'RIGHTS_UNAVAILABLE', '이 계정의 정보 관리 권한을 확인해 주세요.');
 const actorAuthority = `rights.actor_id = rights.account_id
@@ -134,6 +135,58 @@ export function createAccountLifecycle({
     [input.accountId, input.actorId, input.accountId, await actorProof(input.actorId)]);
     if (!row) throw noAccess();
     return stateResult(row);
+  }
+
+  async function getProfileContext({ actorId } = {}) {
+    if (typeof actorId !== 'string' || !ID.test(actorId)) throw noAccess();
+    const row = await first(`SELECT player.public_id
+      FROM auth_accounts actor LEFT JOIN game_players player ON player.id = actor.id
+      WHERE actor.id = ? AND actor.disabled_at IS NULL
+        AND ${accountAllowedSql('actor.id')} AND ${accountSessionSql('actor.id', sessionProof)}`, [actorId]);
+    if (!row) throw noAccess();
+    return { playerId: row.public_id ?? null };
+  }
+
+  async function listChildren({ actorId } = {}) {
+    if (typeof actorId !== 'string' || !ID.test(actorId)) throw noAccess();
+    const actorGuard = `guardian_actor.id = ? AND guardian_actor.disabled_at IS NULL
+      AND ${accountAllowedSql('guardian_actor.id')} AND ${accountSessionSql('guardian_actor.id', sessionProof)}`;
+    const proof = () => prepare(`SELECT 1 AS allowed FROM auth_accounts guardian_actor WHERE ${actorGuard}`, [actorId]);
+    // A single read batch owns the actor and family snapshot. The final proof
+    // also rejects a session deadline crossed while constructing the list.
+    const result = await database.batch([
+      proof(),
+      prepare(`SELECT child_link.child_account_id,
+          COALESCE(NULLIF(TRIM(substr(player.name, 1, 80)), ''), '연결된 어린이') AS label,
+          COALESCE(control.state, CASE WHEN child_link.state = 'withdrawn' OR child.disabled_at IS NOT NULL
+            THEN 'withdrawn' ELSE 'active' END) AS state,
+          job.status AS deletion_status, job.requested_at, job.completed_at
+        FROM auth_accounts guardian_actor
+        JOIN guardian_links child_link ON child_link.guardian_account_id = guardian_actor.id
+        LEFT JOIN auth_accounts child ON child.id = child_link.child_account_id
+        LEFT JOIN game_players player ON player.id = child_link.child_account_id
+        LEFT JOIN privacy_account_controls control ON control.account_id = child_link.child_account_id
+        LEFT JOIN privacy_deletion_jobs job ON job.account_id = child_link.child_account_id
+        WHERE ${actorGuard} AND child_link.state IN ('active','withdrawn')
+          AND ${guardianAuthoritySql('child_link.child_account_id', 'guardian_actor.id')}
+          AND (child.id IS NOT NULL OR player.id IS NOT NULL)
+          AND COALESCE(control.state, 'active') != 'deleted'
+          AND COALESCE(job.status, 'pending') != 'complete'
+        ORDER BY child_link.linked_at, child_link.child_account_id LIMIT ?`,
+      [actorId, MANAGED_CHILD_LIMIT + 1]),
+      proof(),
+    ]);
+    if (!result[0].results.length || !result[2].results.length) throw noAccess();
+    const rows = result[1].results;
+    return {
+      children: rows.slice(0, MANAGED_CHILD_LIMIT).map(row => ({
+        childAccountId: row.child_account_id, label: row.label, state: row.state,
+        deletion: row.deletion_status ? {
+          status: row.deletion_status, requestedAt: row.requested_at, completedAt: row.completed_at,
+        } : null,
+      })),
+      hasMore: rows.length > MANAGED_CHILD_LIMIT,
+    };
   }
 
   async function committedStatus(accountId) {
@@ -286,5 +339,5 @@ export function createAccountLifecycle({
     return { processed, pending: pending.count, awaitingPolicy: false, scope: 'live-database', backupReplayRequired: true };
   }
 
-  return Object.freeze({ withdraw, requestDeletion, getStatus, exportData, processDeletionJobs });
+  return Object.freeze({ withdraw, requestDeletion, getStatus, getProfileContext, listChildren, exportData, processDeletionJobs });
 }

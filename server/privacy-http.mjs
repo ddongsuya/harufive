@@ -67,10 +67,11 @@ async function quota(db, userId, at, sessionProof) {
 export async function handlePrivacyRequest(request, { namespace, action, db, env = {}, now = Date.now } = {}) {
   try {
     const readStatus = namespace === 'privacy' && action === 'status' && request.method === 'GET';
+    const readChildren = namespace === 'privacy' && action === 'children';
     const readRequests = namespace === 'guardian' && action === 'requests';
     const definition = namespace === 'privacy' ? RIGHTS : namespace === 'guardian' ? GUARDIAN : {};
-    if (!readStatus && !readRequests && !Object.hasOwn(definition, action)) fail(404, 'NOT_FOUND');
-    const method = readStatus || readRequests ? 'GET' : 'POST';
+    if (!readStatus && !readChildren && !readRequests && !Object.hasOwn(definition, action)) fail(404, 'NOT_FOUND');
+    const method = readStatus || readChildren || readRequests ? 'GET' : 'POST';
     if (request.method !== method) return json({ code: 'METHOD_NOT_ALLOWED' }, 405, { Allow: method });
     const url = new URL(request.url);
     let origin;
@@ -91,7 +92,9 @@ export async function handlePrivacyRequest(request, { namespace, action, db, env
     if (!Number.isSafeInteger(age) || age < 0 || age >= PRIVACY_LIMITS.freshSessionMs) {
       fail(401, 'REAUTH_REQUIRED', '정보 관리를 위해 다시 로그인해 주세요.');
     }
-    if (method === 'POST' && request.headers.get('X-Haru-Account') !== identity.accountContext) {
+    // Status establishes the current context. Every subsequent rights read or
+    // mutation must belong to that same session, including guardian lists.
+    if (!readStatus && request.headers.get('X-Haru-Account') !== identity.accountContext) {
       fail(409, 'ACCOUNT_CHANGED', '계정 정보 화면을 다시 열고 시도해 주세요.');
     }
     const database = db.withSession?.('first-primary') || db;
@@ -99,12 +102,19 @@ export async function handlePrivacyRequest(request, { namespace, action, db, env
     await quota(database, identity.userId, Math.floor(now()), sessionProof);
     const lifecycle = createAccountLifecycle({ db: database, now, sessionProof });
     const guardian = createGuardianService({ db: database, env, now, sessionProof });
-    if (readStatus) return json({
-      accountContext: identity.accountContext,
-      account: await lifecycle.getStatus({ actorId: identity.userId, accountId: identity.userId }),
-      guardian: guardian.status(),
-      selfRecoveryReady: false,
-    });
+    if (readStatus) {
+      const account = await lifecycle.getStatus({ actorId: identity.userId, accountId: identity.userId });
+      // The final guarded query ties this rights session to the visible game's
+      // public profile. A session revoked during earlier work returns no data.
+      const { playerId } = await lifecycle.getProfileContext({ actorId: identity.userId });
+      return json({
+        accountContext: identity.accountContext, playerId, account,
+        guardian: guardian.status(),
+        selfRecoveryReady: false,
+        capabilities: { selfExport: true, childManagement: true, selfClosure: false, guardianEnrollment: false },
+      });
+    }
+    if (readChildren) return json(await lifecycle.listChildren({ actorId: identity.userId }));
     if (readRequests) return json({ requests: await guardian.listRequests(identity.userId) });
     if (namespace === 'guardian') {
       const actor = identity.userId;

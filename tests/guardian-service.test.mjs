@@ -332,3 +332,16 @@ test('binding requires configured current policy in both the request and consent
     assert.equal(h.db.rows("SELECT state FROM privacy_account_controls WHERE account_id='child-one'")[0].state, 'pending');
   }
 });
+
+test('request rejection removes proof and request together when session freshness expires inside the batch', async t => {
+  const h = harness(t);
+  const request = await approved(h);
+  const service = sessionService(h);
+  h.db.sqlite.function('expire_guardian_session', () => { h.setTime(CLOCK + 901000); return 1; });
+  h.db.sqlite.exec(`CREATE TRIGGER expire_after_guardian_claim AFTER UPDATE OF consume_token ON guardian_requests
+    WHEN NEW.consume_token IS NOT NULL BEGIN SELECT expire_guardian_session(); END`);
+  assert.deepEqual(await service.rejectRequest('guardian-one', request.requestId), { removed: true });
+  assert.equal(h.now(), CLOCK + 901000);
+  assert.equal(h.db.rows('SELECT * FROM guardian_requests').length, 0);
+  assert.equal(h.db.rows('SELECT * FROM guardian_consents').length, 0);
+});

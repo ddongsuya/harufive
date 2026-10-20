@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createSQLiteD1 } from './helpers/d1-test-db.mjs';
-import { createAccountLifecycle } from '../server/account-lifecycle.mjs';
+import { createAccountLifecycle, MANAGED_CHILD_LIMIT } from '../server/account-lifecycle.mjs';
 import { runPrivacyMaintenance } from '../scripts/privacy-maintenance.mjs';
 
 const START = Date.parse('2026-10-20T12:00:00+09:00');
@@ -336,4 +336,49 @@ test('session deadline crossing inside a transaction rolls back every partial cl
     assert.equal(f.db.rows("SELECT disabled_at FROM auth_accounts WHERE id='self'")[0].disabled_at, null);
     assert.equal(f.db.rows('SELECT revoked_at FROM auth_sessions WHERE token_hash = ?', tokenHash)[0].revoked_at, null);
   });
+});
+
+test('child list bounds SQL results and reports overflow without exposing extra child records', async t => {
+  const f = fixture(t);
+  await seed(f, 'parent', { player: false });
+  const statements = [];
+  for (let index = 0; index <= MANAGED_CHILD_LIMIT; index += 1) {
+    const child = `child-${String(index).padStart(3, '0')}`;
+    statements.push(f.db.prepare('INSERT INTO auth_accounts (id,created_at) VALUES (?,?)').bind(child, START));
+    statements.push(f.db.prepare(`INSERT INTO guardian_consents
+      (id,guardian_account_id,child_account_id,proof_hash,jti_hash,subject_hash,scopes,policy_version,approved_at)
+      VALUES (?,'parent',?,?,?,?,'[]','test-v1',?)`).bind(`consent-${child}`, child, `proof-${child}`, `jti-${child}`, `subject-${child}`, START));
+    statements.push(f.db.prepare(`INSERT INTO guardian_links
+      (child_account_id,guardian_account_id,consent_id,state,linked_at) VALUES (?,'parent',?,'active',?)`)
+      .bind(child, `consent-${child}`, START));
+  }
+  await f.db.batch(statements);
+  const result = await f.lifecycle.listChildren({ actorId: 'parent' });
+  assert.equal(result.children.length, MANAGED_CHILD_LIMIT);
+  assert.equal(result.hasMore, true);
+  assert.equal(result.children[0].childAccountId, 'child-000');
+  assert.doesNotMatch(JSON.stringify(result), /child-100|proof-|jti-|subject-/);
+  assert.equal(f.db.rows('SELECT COUNT(*) AS count FROM game_players')[0].count, 0);
+});
+
+test('a session deadline crossing during list reads rejects the accumulated family response', async t => {
+  const f = fixture(t);
+  await seed(f, 'child');
+  await guardian(f, 'parent', 'child');
+  const { lifecycle } = await sessionService(f, 'parent');
+  const seconds = Math.floor(Date.now() / 1000);
+  let inside = false, calls = 0;
+  f.db.sqlite.function('unixepoch', _argument => {
+    if (!inside) return seconds;
+    calls += 1;
+    // Let the first proof pass; later reads/final proof must reject it.
+    return calls <= 3 ? seconds : seconds + 901;
+  });
+  f.db.beforeBatch = statements => {
+    if (statements.some(statement => statement.sql.includes('JOIN guardian_links child_link'))) {
+      inside = true;
+    }
+  };
+  await assert.rejects(lifecycle.listChildren({ actorId: 'parent' }), rejected('RIGHTS_UNAVAILABLE'));
+  assert.ok(calls > 3);
 });

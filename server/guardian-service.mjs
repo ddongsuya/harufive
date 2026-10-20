@@ -174,12 +174,18 @@ export function createGuardianService({ db, env = {}, now = Date.now, sessionPro
   async function rejectRequest(guardianId, requestId) {
     await requireGuardian(guardianId);
     identifier(requestId);
+    const operation = randomToken();
     const batch = await database.batch([
+      // Authorize once inside this transaction, then use a private operation
+      // token for both removals. Re-evaluating a moving session deadline after
+      // removing the proof could otherwise leave an unusable approved request.
+      statement(`UPDATE guardian_requests SET consume_token = ? WHERE id = ? AND guardian_account_id = ?
+        AND state IN ('pending', 'approved') AND ${guardianAllowedSql('guardian_requests.guardian_account_id')}`, operation, requestId, guardianId),
       statement(`DELETE FROM guardian_consents WHERE id = ? AND guardian_account_id = ? AND child_account_id IS NULL
-        AND EXISTS (SELECT 1 FROM guardian_requests WHERE id = ? AND guardian_account_id = ? AND ${guardianAllowedSql('guardian_requests.guardian_account_id')})`, requestId, guardianId, requestId, guardianId),
-      statement(`DELETE FROM guardian_requests WHERE id = ? AND guardian_account_id = ? AND ${guardianAllowedSql('guardian_requests.guardian_account_id')}`, requestId, guardianId),
+        AND EXISTS (SELECT 1 FROM guardian_requests WHERE id = ? AND consume_token = ?)`, requestId, guardianId, requestId, operation),
+      statement('DELETE FROM guardian_requests WHERE id = ? AND consume_token = ?', requestId, operation),
     ]);
-    return { removed: batch[1].meta.changes > 0 };
+    return { removed: batch[2].meta.changes > 0 };
   }
   // Only a future trusted enrollment adapter may call this after its own child
   // identity binding. It never creates an auth account, identity, or player.

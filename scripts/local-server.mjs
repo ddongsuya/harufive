@@ -71,7 +71,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const server = await createLocalServer();
   server.listen(port, '127.0.0.1', () => {
     console.log(`하루다섯 로컬 화면: http://127.0.0.1:${port}`);
-    console.log('별도 로컬 DB 사용. 실제 로그인·어린이 가입·외부 배포는 연결하지 않았습니다.');
+    console.log('별도 로컬 DB 사용. 만 14세 이상 정책이며 실제 연령 확인·가입·로그인·외부 배포는 연결하지 않았습니다.');
   });
   for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => {
     server.close(); server.closeAllConnections();

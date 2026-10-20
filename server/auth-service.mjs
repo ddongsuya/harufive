@@ -1,4 +1,5 @@
 import { accountAllowedSql } from './privacy-contract.mjs';
+import { ADMISSION_POLICY } from './admission-policy.mjs';
 import { createLocalJWKSet, jwtVerify } from 'jose';
 
 // These are application sign-ins inside a Site. None of the Sites platform's
@@ -221,7 +222,9 @@ async function resolveInternal(request, { db, env, sitesUserId, sitesEmail, now 
   if (!permitted?.allowed) return null;
   const testerEmail = credential(env, 'HARU_SITES_TESTER_EMAIL');
   const privateTester = testerEmail && typeof sitesEmail === 'string' && sitesEmail.trim().toLowerCase() === testerEmail.trim().toLowerCase();
-  if (!account && !privateTester && env?.HARU_REGISTRATION_OPEN !== 'true' &&
+  // Existing Sites accounts and a trusted private developer remain usable.
+  // The developer exception is not proof of age or a public admission route.
+  if (!account && !privateTester &&
     !await db.prepare('SELECT id FROM game_players WHERE id = ?').bind(userId).first()) return null;
   // A legacy game account needs no record migration and no email-based lookup.
   return { userId, provider: 'chatgpt', linkedProviders: await linkedProviders(db, userId), sessionHash: null };
@@ -556,28 +559,20 @@ async function linkIdentity(request, identity, flow, options) {
 }
 
 async function createSession(identity, flow, options) {
-  const { db, env, now } = options;
+  const { db, now } = options;
   const tuple = identityParameters(identity);
   const existing = await db.prepare(`SELECT account_id FROM auth_identities WHERE ${IDENTITY_WHERE}`).bind(...tuple).first();
-  const registrationOpen = env?.HARU_REGISTRATION_OPEN === 'true';
-  if (!existing && !registrationOpen) throw new AuthError(403, 'INVALID_REQUEST', 'signup_closed');
+  // A verified provider subject proves identity, not minimum signup age.
+  // Public admission stays closed even if old deployment flags request it.
+  if (!existing) throw new AuthError(403, 'INVALID_REQUEST', 'signup_closed');
   const at = timestamp(now);
   const proof = [flow.state_hash, flow.claim_token, at];
   const liveFlow = 'EXISTS (SELECT 1 FROM auth_oauth_transactions WHERE state_hash = ? AND claim_token = ? AND expires_at > ?)';
-  const candidate = `social:${crypto.randomUUID()}`;
   const rawToken = randomToken();
   const tokenHash = await digest(rawToken);
   const statements = [];
-  if (registrationOpen) {
-    statements.push(db.prepare(`INSERT INTO auth_accounts (id, created_at)
-      SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM auth_identities WHERE ${IDENTITY_WHERE}) AND ${liveFlow}`).bind(candidate, at, ...tuple, ...proof));
-    statements.push(db.prepare(`INSERT INTO auth_identities (id, account_id, provider, issuer, audience, subject, linked_at)
-      SELECT ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM auth_accounts WHERE id = ?)
-        AND NOT EXISTS (SELECT 1 FROM auth_identities WHERE ${IDENTITY_WHERE}) AND ${liveFlow}`)
-      .bind(crypto.randomUUID(), candidate, ...tuple, at, candidate, ...tuple, ...proof));
-  }
-  // Resolve the winning identity inside the same transaction. Concurrent first
-  // logins for one provider subject cannot create two accounts or move ownership.
+  // Resolve only the existing identity inside the same transaction. Concurrent
+  // sign-ins cannot create accounts or move provider-subject ownership.
   statements.push(db.prepare(`DELETE FROM auth_sessions WHERE token_hash IN (
     SELECT s.token_hash FROM auth_sessions s JOIN auth_identities i ON i.account_id = s.account_id
     WHERE i.provider = ? AND i.issuer = ? AND i.audience = ? AND i.subject = ?
@@ -795,7 +790,9 @@ export async function handleAuthRequest(request, {
           providers: reauthProviders.map(item => ({ ...item, enabled: reauthContext !== null && item.enabled })),
         },
         registration: {
-          open: env.HARU_REGISTRATION_OPEN === 'true', ageTarget: '전체이용가 목표', minimumSignupAge: null, guardianReady: false,
+          open: ADMISSION_POLICY.registrationOpen, ageTarget: '전체이용가 목표',
+          minimumSignupAge: ADMISSION_POLICY.minimumSignupAge, guardianReady: false,
+          under14EnrollmentOpen: ADMISSION_POLICY.under14EnrollmentOpen, ageVerificationReady: ADMISSION_POLICY.ageVerificationReady,
         },
       });
     }

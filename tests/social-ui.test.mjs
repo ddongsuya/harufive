@@ -28,7 +28,7 @@ await test('social account UI uses server availability and explicit account-link
       }
       assert.match(h.app.innerHTML,/카카오/);assert.match(h.app.innerHTML,/Google/);assert.match(h.app.innerHTML,/네이버/);
       assert.equal(h.calls.filter(call=>call.body).length,0);assert.equal(h.navigations.length,0);assert.equal(h.writes.length,0);
-      await h.click('release-info');assert.match(h.modal.innerHTML,/전체이용가를 목표/);assert.match(h.modal.innerHTML,/등급이 확정되었다는 뜻은 아니/);
+      await h.click('release-info');assert.match(h.modal.innerHTML,/만 14세 이상 이용자/);assert.match(h.modal.innerHTML,/연령 확인 절차를 준비하고 있어요/);assert.match(h.modal.innerHTML,/게임물 등급은 아직 확정되지 않았어요/);
       await h.click('close-modal',{},true);assert.equal(h.modal.open,false);
       assert.deepEqual(auditMarkup(h.markup()).issues,[]);
     }finally{h.restore();}

@@ -1,4 +1,5 @@
 import { resolvePrivacyIdentity } from './auth-service.mjs';
+import { ADMISSION_POLICY } from './admission-policy.mjs';
 import { createAccountLifecycle } from './account-lifecycle.mjs';
 import { createGuardianService } from './guardian-service.mjs';
 import { PrivacyError, accountAllowedSql, accountSessionSql } from './privacy-contract.mjs';
@@ -99,6 +100,12 @@ export async function handlePrivacyRequest(request, { namespace, action, db, env
     if (!readStatus && request.headers.get('X-Haru-Account') !== identity.accountContext) {
       fail(409, 'ACCOUNT_CHANGED', '계정 정보 화면을 다시 열고 시도해 주세요.');
     }
+    // The current 14+ policy closes new child enrollment even if an old
+    // verifier key is configured. Existing request cleanup and family rights
+    // remain available; retained core code is not a new admission route.
+    if (namespace === 'guardian' && ['create', 'rotate', 'approve'].includes(action)) {
+      fail(403, 'CHILD_ENROLLMENT_CLOSED', '만 14세 미만 신규 가입은 제공하지 않아요.');
+    }
     const database = db.withSession?.('first-primary') || db;
     const sessionProof = { tokenHash: identity.sessionHash };
     await quota(database, identity.userId, Math.floor(now()), sessionProof);
@@ -110,7 +117,7 @@ export async function handlePrivacyRequest(request, { namespace, action, db, env
       // public profile. A session revoked during earlier work returns no data.
       const { playerId } = await lifecycle.getProfileContext({ actorId: identity.userId });
       return json({
-        accountContext: identity.accountContext, playerId, account,
+        accountContext: identity.accountContext, playerId, account, admission: ADMISSION_POLICY,
         guardian: guardian.status(),
         selfRecoveryReady: false,
         capabilities: { selfExport: true, childManagement: true, selfClosure: false, guardianEnrollment: false },

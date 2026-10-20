@@ -168,6 +168,7 @@ test('privacy status exposes a session context and unready enrollment without cr
   assert.equal(body.playerId, null);
   assert.deepEqual(body.account, { state: 'active', deletion: null });
   assert.deepEqual(body.guardian, { guardianReady: false, providerConfigured: false, enrollmentOpen: false });
+  assert.deepEqual(body.admission, { minimumSignupAge: 14, registrationOpen: false, under14EnrollmentOpen: false, ageVerificationReady: false });
   assert.equal(body.selfRecoveryReady, false);
   assert.deepEqual(body.capabilities, { selfExport: true, childManagement: true, selfClosure: false, guardianEnrollment: false });
   assert.doesNotMatch(JSON.stringify(body), /status-account|secret-binding|another-account/);
@@ -565,7 +566,7 @@ test('a relation removed before a queued child list is read cannot disclose its 
   assert.deepEqual(await (await f.list('/api/privacy/children', session)).json(), { children: [], hasMore: false });
 });
 
-test('guardian routes list only owned requests, rotate and reject without exposing stored secrets', async t => {
+test('14+ policy closes new guardian enrollment but preserves owned pending-request listing and rejection', async t => {
   const f = fixture(t);
   const guardian = f.session('request-guardian');
   f.account('other-request-guardian');
@@ -578,16 +579,13 @@ test('guardian routes list only owned requests, rotate and reject without exposi
   assert.equal(requests.length, 1);
   assert.equal(requests[0].requestId, requestId);
   assert.deepEqual(Object.keys(requests[0]).sort(), ['createdAt', 'expiresAt', 'policyVersion', 'requestId', 'status']);
-  await expectCode(await f.post('create', guardian, context, {}, 'guardian'), 503, 'GUARDIAN_NOT_CONFIGURED');
-  const rotated = await f.post('rotate', guardian, context, { requestId }, 'guardian');
-  assert.equal(rotated.status, 200);
-  const rotation = await rotated.json();
-  assert.match(rotation.requestToken, /^[A-Za-z0-9_-]{43}$/);
-  assert.match(rotation.nonce, /^[A-Za-z0-9_-]{43}$/);
-  assert.equal(rotation.expiresAt, START + 86400000);
+  const before = f.db.rows('SELECT * FROM guardian_requests');
+  await expectCode(await f.post('create', guardian, context, {}, 'guardian'), 403, 'CHILD_ENROLLMENT_CLOSED');
+  await expectCode(await f.post('rotate', guardian, context, { requestId }, 'guardian'), 403, 'CHILD_ENROLLMENT_CLOSED');
   await expectCode(await f.post('approve', guardian, context, {
-    requestId, requestToken: rotation.requestToken, attestation: 'untrusted-proof',
-  }, 'guardian'), 503, 'GUARDIAN_NOT_CONFIGURED');
+    requestId, requestToken: 'old-request-token', attestation: 'untrusted-proof',
+  }, 'guardian'), 403, 'CHILD_ENROLLMENT_CLOSED');
+  assert.deepEqual(f.db.rows('SELECT * FROM guardian_requests'), before);
   assert.equal(f.db.rows('SELECT * FROM guardian_consents').length, 0);
   const rejected = await f.post('reject', guardian, context, { requestId }, 'guardian');
   assert.equal(rejected.status, 200);
@@ -639,6 +637,9 @@ test('configured OAuth credentials and requested open registration still cannot 
   const status = await (await f.call('/api/auth/status')).json();
   assert.equal(status.registration.open, false);
   assert.equal(status.registration.guardianReady, false);
+  assert.equal(status.registration.minimumSignupAge, 14);
+  assert.equal(status.registration.under14EnrollmentOpen, false);
+  assert.equal(status.registration.ageVerificationReady, false);
   assert.equal(status.sites.enabled, false);
   assert.ok(status.providers.every(provider => !provider.enabled && provider.reason === 'admission_not_ready'));
   for (const provider of ['google', 'kakao', 'naver']) {
@@ -654,4 +655,32 @@ test('configured OAuth credentials and requested open registration still cannot 
   for (const table of ['auth_accounts', 'auth_identities', 'auth_sessions', 'auth_oauth_transactions', 'auth_rate_limits', 'guardian_requests']) {
     assert.equal(f.db.rows(`SELECT COUNT(*) AS count FROM ${table}`)[0].count, 0, table);
   }
+});
+
+
+test('configured legacy guardian keys and client claims cannot reopen child enrollment or alter existing family data', async t => {
+  const f = fixture(t);
+  Object.assign(f.env, {
+    HARU_GUARDIAN_ATTESTATION_PUBLIC_KEY: '-----BEGIN PUBLIC KEY-----\nlegacy-key-placeholder\n-----END PUBLIC KEY-----',
+    HARU_GUARDIAN_ATTESTATION_ISSUER: 'https://legacy-guardian.example.test',
+    HARU_GUARDIAN_ATTESTATION_AUDIENCE: 'legacy-haru', HARU_GUARDIAN_POLICY_VERSION: 'legacy-policy',
+    HARU_REGISTRATION_OPEN: 'true', HARU_GUARDIAN_READY: 'true', HARU_MINIMUM_SIGNUP_AGE: '0',
+  });
+  const guardian = f.session('existing-family-guardian');
+  f.family('existing-family-guardian', 'existing-family-child');
+  const requestId = f.guardianRequest('existing-family-guardian');
+  const context = await f.context(guardian);
+  const tables = ['auth_accounts', 'privacy_account_controls', 'guardian_requests', 'guardian_consents', 'guardian_links'];
+  const before = tables.map(table => f.db.rows(`SELECT * FROM ${table}`));
+  for (const [action, body] of [
+    ['create', {}], ['rotate', { requestId }],
+    ['approve', { requestId, requestToken: 'old-request-token', attestation: 'claimed-age-and-guardian-proof' }],
+  ]) {
+    await expectCode(await f.post(action, guardian, context, body, 'guardian'), 403, 'CHILD_ENROLLMENT_CLOSED');
+  }
+  assert.deepEqual(tables.map(table => f.db.rows(`SELECT * FROM ${table}`)), before);
+  assert.equal((await f.list('/api/privacy/children', guardian, context)).status, 200);
+  assert.equal((await f.post('export', guardian, context, { childAccountId: 'existing-family-child' })).status, 200);
+  assert.equal((await f.post('withdraw', guardian, context, { childAccountId: 'existing-family-child', confirmation: 'withdraw' })).status, 200);
+  assert.equal((await f.post('delete', guardian, context, { childAccountId: 'existing-family-child', confirmation: 'delete' })).status, 200);
 });

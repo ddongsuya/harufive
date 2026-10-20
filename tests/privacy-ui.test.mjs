@@ -100,23 +100,43 @@ async function selectChild(h) {
   await h.click('privacy-child', { child: CHILD });
 }
 
-test('public privacy and guardian destinations explain readiness without collecting data', async () => {
+test('public privacy and compatibility guardian destinations explain the age policy without enrollment controls', async () => {
   for (const hash of ['#privacy', '#guardian']) {
     const { h } = await fixture({ hash, authenticated: false });
     try {
       assert.match(h.app.innerHTML, /limjm900202@gmail\.com/);
       assert.match(h.app.innerHTML, /준비/);
+      assert.match(h.app.innerHTML, /만 14세 이상/);
+      assert.match(h.app.innerHTML, /연령 확인 절차를 준비하고 있어요/);
       assert.equal(privacyCalls(h).length, 0);
       assert.equal(h.app.querySelectorAll('input').length, 0);
       assert.equal(h.app.querySelectorAll('textarea').length, 0);
       assert.equal(h.writes.length, 0);
       if (hash === '#guardian') {
-        assert.equal(h.app.querySelector('[data-action="guardian-start"]').disabled, true);
-        assert.equal(await h.click('guardian-start'), false);
+        assert.equal(h.app.querySelector('[data-action="guardian-start"]'), null);
+        assert.match(h.app.innerHTML, /만 14세 미만 어린이의 가입과 이용은 제공하지 않아요/);
       }
       checkMarkup(h);
     } finally { h.restore(); }
   }
+});
+
+test('accounts without verified child links show only their own records and no child enrollment or management controls', async () => {
+  const { h } = await fixture({ children: [] });
+  try {
+    await openPrivacy(h);
+    assert.deepEqual(privacyCalls(h).map(call => call.url), ['/api/privacy/status', '/api/privacy/children']);
+    assert.doesNotMatch(h.app.innerHTML, /연결된 어린이|보호자 관리|어린이 계정 연결|guardian-start/);
+    for (const action of ['privacy-child', 'privacy-withdraw', 'privacy-delete', 'guardian-start']) {
+      assert.equal(h.app.querySelector(`[data-action="${action}"]`), null);
+    }
+    const ownExport=h.app.querySelector('[data-action="privacy-export"]');
+    assert.equal(ownExport.dataset.target, 'self');
+    assert.equal(ownExport.disabled, false);
+    assert.equal(h.app.querySelectorAll('input').length, 0);
+    assert.equal(writes(h).length, 0);
+    checkMarkup(h);
+  } finally { h.restore(); }
 });
 
 test('opening information management shows loading then fetches fresh status before the child list', async () => {
@@ -361,7 +381,8 @@ test('child labels are escaped and raw provider availability never enables unfin
     assert.doesNotMatch(h.app.innerHTML, /<img src=x/);
     assert.match(h.app.innerHTML, /&lt;img/);
     await h.click('guardian-open');
-    assert.equal(h.app.querySelector('[data-action="guardian-start"]').disabled, true);
+    assert.equal(h.app.querySelector('[data-action="guardian-start"]'), null);
+    assert.match(h.app.innerHTML, /만 14세 이상/);
     assert.equal(writes(h).length, 0); assert.equal(h.app.querySelectorAll('input').length, 0);
     checkMarkup(h);
   } finally { h.restore(); }

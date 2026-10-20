@@ -11,7 +11,8 @@ function failure(status, code, message, headers = {}) {
 
 /** Public-host adapter. No Sites identity, header fallback, or platform routes.
  * Only server-verified opaque sessions select an existing account. Registration
- * stays closed until a verified consent/admission service is integrated.
+ * stays closed under the 14+ policy until age/admission verification is ready.
+ * Legacy account sessions and data rights do not prove an account's age.
  * @param {Request} request
  * @param {{db?: any, env?: any, now?: () => number, fetch?: typeof globalThis.fetch}} options
  */

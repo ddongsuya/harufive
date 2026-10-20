@@ -130,7 +130,20 @@ function harness(t, { env = {}, sitesUserId, sitesEmail } = {}) {
     const query = new URLSearchParams({ state: flow.state, code: flow.code, ...params });
     return h.invoke('callback', request(`/api/auth/${provider}/callback?${query}`, { cookie, headers: { 'Sec-Fetch-Site': 'cross-site' } }), { provider, ...flow.options, ...options });
   };
+  // Seed existing identities explicitly for sign-in regression tests. No
+  // production admission option or unverified age claim creates these rows.
+  h.seedIdentity = ({ provider = 'google', subject = 'subject-1' } = {}) => {
+    const audience = settings[`HARU_${provider.toUpperCase()}_CLIENT_ID`];
+    const existing = db.sqlite.prepare('SELECT account_id FROM auth_identities WHERE provider=? AND issuer=? AND audience=? AND subject=?').get(provider, ISSUERS[provider], audience, subject);
+    if (existing) return existing.account_id;
+    const accountId = `social:${crypto.randomUUID()}`;
+    db.sqlite.prepare('INSERT INTO auth_accounts(id,created_at) VALUES (?,?)').run(accountId, clock);
+    db.sqlite.prepare('INSERT INTO auth_identities(id,account_id,provider,issuer,audience,subject,linked_at) VALUES (?,?,?,?,?,?,?)')
+      .run(crypto.randomUUID(), accountId, provider, ISSUERS[provider], audience, subject, clock);
+    return accountId;
+  };
   h.login = async (args = {}) => {
+    h.seedIdentity(args);
     const flow = await h.begin(args);
     const response = await h.callback(flow);
     assert.equal(response.headers.get('Location'), `${ORIGIN}/?auth=success`);
@@ -146,7 +159,7 @@ test('auth status exposes only configuration state and no app identity without a
   assert.equal(body.authenticated, false);
   assert.equal(body.account, null);
   assert.deepEqual(body.providers.map(item => [item.id, item.enabled, item.reason]), [['kakao', false, 'not_configured'], ['google', false, 'not_configured'], ['naver', false, 'not_configured']]);
-  assert.deepEqual(body.registration, { open: false, ageTarget: '전체이용가 목표', minimumSignupAge: null, guardianReady: false });
+  assert.deepEqual(body.registration, { open: false, ageTarget: '전체이용가 목표', minimumSignupAge: 14, guardianReady: false, under14EnrollmentOpen: false, ageVerificationReady: false });
   assert.equal(response.headers.get('Cache-Control'), 'private, no-store');
   assert.equal(response.headers.get('Referrer-Policy'), 'no-referrer');
   assert.ok(!JSON.stringify(body).includes('trusted-owner'));
@@ -197,6 +210,7 @@ test('all three providers complete signed RS256, PKCE and nonce verification and
 
 test('forged, swapped, wrong-provider, expired and replayed OAuth state do not exchange an authorization code', async t => {
   const h = harness(t, { env: { HARU_REGISTRATION_OPEN: 'true' } });
+  h.seedIdentity();
   const a = await h.begin();
   const b = await h.begin();
   for (const options of [{ params: { state: 'X'.repeat(43) } }, { cookie: b.cookie }, { provider: 'kakao' }]) {
@@ -250,8 +264,9 @@ test('provider callback error text and query redirects are never reflected', asy
   assert.equal((await h.callback(next, { params: { return_to: 'https://attacker.example.test' } })).headers.get('Location'), `${ORIGIN}/?auth_error=invalid_request`);
 });
 
-test('verified email equality never merges accounts; simultaneous same-subject sign-ins converge atomically', async t => {
+test('verified email equality never merges existing accounts; simultaneous same-subject sign-ins preserve ownership', async t => {
   const h = harness(t, { env: { HARU_REGISTRATION_OPEN: 'true' } });
+  h.seedIdentity({ subject: 'same-subject' });
   const a = await h.begin({ subject: 'same-subject' });
   const b = await h.begin({ subject: 'same-subject' });
   const [ra, rb] = await Promise.all([h.callback(a), h.callback(b)]);
@@ -352,6 +367,8 @@ test('logout while token exchange is pending cancels login and Sites linking bef
       env: { HARU_REGISTRATION_OPEN: 'true', HARU_SITES_TESTER_EMAIL: 'owner@example.test' },
       sitesUserId: 'sites-owner', sitesEmail: 'owner@example.test',
     });
+    if (intent === 'login') h.seedIdentity();
+    const identitiesBefore = h.db.rows('SELECT * FROM auth_identities');
     const flow = await h.begin({ intent, cookie: intent === 'link' ? `${AUTH_COOKIES.session}=sites` : '' });
     h.pause = { entered: deferred(), release: deferred() };
     const pending = h.callback(flow);
@@ -362,28 +379,33 @@ test('logout while token exchange is pending cancels login and Sites linking bef
     const response = await pending;
     assert.equal(response.headers.get('Location'), `${ORIGIN}/?auth_error=account_changed`);
     assert.equal(h.db.rows('SELECT * FROM auth_sessions').length, 0);
-    assert.equal(h.db.rows('SELECT * FROM auth_identities').length, 0);
+    assert.deepEqual(h.db.rows('SELECT * FROM auth_identities'), identitiesBefore);
     assert.equal(response.headers.getSetCookie().length, 0, 'Stale callback cannot overwrite logout or a newer browser flow');
   });
 });
 
 test('a new start cancels an in-flight callback and old response cannot erase the new binding', async t => {
   const h = harness(t, { env: { HARU_REGISTRATION_OPEN: 'true' } });
+  h.seedIdentity();
   const a = await h.begin();
   h.pause = { entered: deferred(), release: deferred() };
   const pending = h.callback(a);
   await h.pause.entered.promise;
+  h.seedIdentity({ provider: 'kakao' });
   const b = await h.begin({ provider: 'kakao', cookie: a.cookie });
+  const accountsBefore = h.db.rows('SELECT * FROM auth_accounts');
   h.pause.release.resolve();
   assert.equal((await pending).headers.get('Location'), `${ORIGIN}/?auth_error=account_changed`);
   h.pause = null;
   assert.equal((await h.callback(b)).headers.get('Location'), `${ORIGIN}/?auth=success`);
-  assert.equal(h.db.rows('SELECT * FROM auth_accounts').length, 1);
+  assert.deepEqual(h.db.rows('SELECT * FROM auth_accounts'), accountsBefore);
+  assert.deepEqual(h.db.rows('SELECT provider FROM auth_sessions'), [{ provider: 'kakao' }]);
 });
 
 test('logout or a new start also revokes an issued session whose callback cookie has not arrived yet', async t => {
   for (const action of ['logout', 'start']) await t.test(action, async t => {
     const h = harness(t, { env: { HARU_REGISTRATION_OPEN: 'true' } });
+    h.seedIdentity();
     const flow = await h.begin();
     const delayedResponse = await h.callback(flow);
     assert.equal(delayedResponse.headers.get('Location'), `${ORIGIN}/?auth=success`);
@@ -615,7 +637,7 @@ test('reauthentication start requires an opaque session, matching UI context and
   assert.equal(h.db.rows('SELECT * FROM auth_oauth_transactions').length, 0);
 });
 
-test('reauthentication cannot switch accounts or link a new subject even when generic signup is enabled', async t => {
+test('reauthentication cannot switch accounts or link a new subject even when an old signup flag is set', async t => {
   for (const subject of ['different-existing', 'unknown-subject']) await t.test(subject, async t => {
     const h = harness(t, { env: { HARU_REGISTRATION_OPEN: 'true' } });
     const login = await h.login();
@@ -766,4 +788,31 @@ test('logout after callback authentication but before the atomic rotation preven
   assert.equal(response.headers.getSetCookie().length, 0);
   assert.equal(h.db.rows('SELECT * FROM auth_sessions WHERE revoked_at IS NULL').length, 0);
   assert.equal(h.db.rows('SELECT * FROM auth_sessions').length, 1);
+});
+
+
+test('14+ admission stays closed for unknown social subjects despite environment flags and provider age claims', async t => {
+  for (const claims of [{}, { age: 13, birthdate: '2013-10-21' }, { age: 18, age_verified: true, birthdate: '2000-01-01' }]) {
+    const h = harness(t, { env: { HARU_REGISTRATION_OPEN: 'true', HARU_AGE_VERIFIED: 'true', HARU_MINIMUM_SIGNUP_AGE: '0' } });
+    const status = await (await h.invoke('status', request('/api/auth/status'))).json();
+    assert.equal(status.registration.open, false);
+    assert.equal(status.registration.minimumSignupAge, 14);
+    assert.equal(status.registration.under14EnrollmentOpen, false);
+    assert.equal(status.registration.ageVerificationReady, false);
+    const flow = await h.begin({ claims });
+    const response = await h.callback(flow);
+    assert.equal(response.headers.get('Location'), `${ORIGIN}/?auth_error=signup_closed`);
+    for (const table of ['auth_accounts', 'auth_identities', 'auth_sessions', 'game_players', 'auth_oauth_transactions']) {
+      assert.equal(h.db.rows(`SELECT * FROM ${table}`).length, 0, table);
+    }
+  }
+});
+
+test('an old open-registration flag cannot admit an unknown Sites identity or imply its age', async t => {
+  const h = harness(t, { sitesUserId: 'new-sites-unknown-age', env: { HARU_REGISTRATION_OPEN: 'true' } });
+  const response = await h.invoke('sites-start', request('/api/auth/sites-start', { method: 'POST', body: {} }));
+  assert.equal(response.status, 200, 'The legacy platform sign-in redirect itself is not game admission');
+  assert.equal(await h.identity(applyCookies(response)), null);
+  assert.equal(h.db.rows('SELECT * FROM auth_accounts').length, 0);
+  assert.equal(h.db.rows('SELECT * FROM game_players').length, 0);
 });

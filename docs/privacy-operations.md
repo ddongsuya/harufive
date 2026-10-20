@@ -4,11 +4,11 @@
 
 ## 1. 공개 준비 상태
 
-독립 서버는 `HARU_REGISTRATION_OPEN=false`, `loginEnabled:false`, `reauthEnabled:false`를 강제하고 `guardianReady:false`, `enrollmentOpen:false`를 반환한다. 키를 넣거나 아래 명령을 실행해도 가입이 열리지 않는다. 기존 계정의 서버 인터페이스와 본인 기록 다운로드·서버 확인 아동 관리 UI를 마련했다. 활성 기존 계정의 [최근 본인 확인 코드](reauthentication.md)는 준비했으나 실제 제공자 지원은 미검증이며 독립 서버에서는 닫혀 있다. 일반 이용자용 성인 최초 진입·아동 가입·실제 동의 수집은 미완성이다. 닫힌 본인 계정의 후속 재인증 경로도 미완성이어서 `selfRecoveryReady:false`다.
+독립 서버는 `HARU_REGISTRATION_OPEN=false`, `loginEnabled:false`, `reauthEnabled:false`를 강제하고 `guardianReady:false`, `enrollmentOpen:false`를 반환한다. 키를 넣거나 아래 명령을 실행해도 가입이 열리지 않는다. 기존 계정의 서버 인터페이스와 본인 기록 다운로드·서버 확인 아동 관리 UI를 마련했다. 활성 기존 계정의 [최근 본인 확인 코드](reauthentication.md)는 준비했으나 실제 제공자 지원은 미검증이며 독립 서버에서는 닫혀 있다. 가입·이용은 만 14세 이상으로 변경했으며 실제 연령 확인·일반 가입은 미완성이다. 신규 아동 가입·보호자 연결은 출시 범위에서 제외하고 기존 가족의 권리 행사는 보존한다. [연령 정책](age-eligibility.md)을 따른다. 닫힌 본인 계정의 후속 재인증 경로도 미완성이어서 `selfRecoveryReady:false`다.
 
-실제 개인정보를 받기 전에 제공자 연결, 동의 대상 아동 확인, 운영 정책과 예약 삭제를 함께 검증해야 한다. 테스트 계정·키를 운영 로그인이나 가짜 동의 성공으로 사용하지 않는다.
+신규 가입을 열기 전에 실제 연령 확인·가입 허가·제공자 연결·운영 정책과 예약 삭제를 함께 검증해야 한다. 필요한 청소년 가입 규정은 별도로 확인하며 신규 아동 확인 계약을 필수 출시 작업으로 두지 않는다. 테스트 계정·키를 운영 로그인이나 가짜 동의 성공으로 사용하지 않는다.
 
-## 2. 외부 증빙 어댑터의 서버 설정
+## 2. 이전 외부 증빙 계약 — 현재 신규 등록 범위 아님
 
 | 설정 | 내용 |
 |---|---|
@@ -17,7 +17,7 @@
 | `HARU_GUARDIAN_ATTESTATION_AUDIENCE` | 하루다섯용으로 발급된 증빙의 정확한 수신자 |
 | `HARU_GUARDIAN_POLICY_VERSION` | 검토한 동의 문구의 현재 버전 |
 
-이 설정은 미래 제공자 통합 계약이다. 네 값의 형태가 채워졌다는 `providerConfigured` 상태는 실제 계약·제공자 확인·서비스 준비 완료를 뜻하지 않는다. 실제 제공자는 선정하지 않았으며 공개 준비 상태는 계속 false다.
+이 설정은 이전 B안에서 준비한 증빙 검증 계약을 보존한 것이다. 신규 보호자 등록을 위한 제공자 통합은 현재 출시 범위에서 제외한다. 네 값의 형태가 채워졌다는 `providerConfigured` 상태는 실제 계약·제공자 확인·서비스 준비 완료를 뜻하지 않는다. 실제 제공자는 선정하지 않았으며 공개 준비 상태는 계속 false다.
 
 수락하는 JWT 계약:
 
@@ -30,7 +30,7 @@
 
 서명과 항목 확인 후에도 DB 변경 시각에 증빙 만료를 다시 검사한다. 같은 요청·같은 증빙의 콜백은 중복 저장하지 않고 수렴한다. 다른 요청에 `jti`를 재사용하면 차단한다. 서버에는 JWT·주체 원문 대신 증빙/JTI/주체의 해시와 최소 동의 메타데이터만 저장한다. 증빙 입력·토큰·nonce를 요청 로그나 오류 보고에 포함하지 않는다.
 
-아동의 실제 신원/대상은 이 JWT 계약만으로 연결되지 않는다. HTTP에 없는 내부 `bindChild`를 호출하는 미래의 서버 가입 어댑터가 실제 확인 대상과 대기 계정의 일치를 보장해야 한다. 클라이언트가 아동 ID를 선택해 호출하는 경로를 추가하지 않는다.
+아동의 실제 신원/대상은 이 JWT 계약만으로 연결되지 않는다. HTTP에 없는 내부 `bindChild`만으로 실제 대상과 대기 계정의 일치를 보장할 수 없다. 이 코어는 이전 보안 회귀 검증용으로 보존하며 새 가입 어댑터에 연결하지 않는다. 클라이언트가 아동 ID를 선택해 호출하는 경로를 추가하지 않는다.
 
 ## 3. 기존 계정용 HTTP 인터페이스
 
@@ -49,9 +49,9 @@ POST는 동일한 `Origin`과 JSON 본문을 요구한다. POST 및 아동·보�
 | `/api/privacy/withdraw` | POST | `confirmation: "withdraw"`를 포함한 철회 |
 | `/api/privacy/delete` | POST | `confirmation: "delete"`를 포함한 삭제 접수 |
 | `/api/guardian/requests` | GET | 본인이 시작한 유효 요청 목록. 토큰·nonce·증빙 제외 |
-| `/api/guardian/create` | POST | 빈 JSON 객체로 보호자 요청 생성. 아동/보호자 연락처 필드 없음 |
-| `/api/guardian/rotate` | POST | `requestId`의 토큰과 nonce 재발급. 최초 기한 유지 |
-| `/api/guardian/approve` | POST | `requestId`, `requestToken`, 서명된 `attestation` 검증 |
+| `/api/guardian/create` | POST | 신규 보호자 등록 범위 제외로 차단. 내부 생성 코어는 보안 회귀용 보존 |
+| `/api/guardian/rotate` | POST | 신규 흐름 연장을 막기 위해 재발급 차단 |
+| `/api/guardian/approve` | POST | 신규 보호자 승인 차단. 기존 증빙의 조회·정리 권한을 확대하지 않음 |
 | `/api/guardian/reject` | POST | `requestId`의 요청 및 미연결 증빙 즉시 제거 |
 
 상태 응답의 `playerId`는 현재 계정의 게임 공개 ID 또는 프로필이 없을 때 null이다. 화면은 이를 이미 표시 중인 게임의 공개 ID와 비교한다. 아동·보호자 목록의 문맥이 누락되거나 쿠키 계정·세션이 바뀌면 서버는 목록을 내보내기 전에 `409 ACCOUNT_CHANGED`로 거절한다. 아동 목록은 `childAccountId`, 표시용 `label`, 상태와 최소 삭제 접수 요약만 제공하며 삭제 완료 계정은 제외한다. 표시 이름은 화면에 출력할 때 이스케이프한다.
@@ -120,7 +120,7 @@ npm run privacy:maintain -- --policy "검토한-로컬-정책.json"
 
 ## 8. 정보 관리 UI의 동작과 검증 범위
 
-로그인 전 `#guardian`은 보호자 확인·동의·아동 연결의 준비 절차와 문의를 안내한다. 실제 확인 시작 버튼은 비활성이며 이름·연락처·인증 서류를 받지 않는다. `#privacy`도 로그인 전에는 안내만 제공하고 개인정보 관련 버튼을 잠근다.
+로그인 전 `#guardian`은 만 14세 이상 이용 정책과 기존 가족의 정보 관리·문의 경로를 안내한다. 신규 보호자 확인·아동 연결은 제공하지 않으며 이름·연락처·인증 서류를 받지 않는다. `#privacy`도 로그인 전에는 안내만 제공하고 개인정보 관련 버튼을 잠근다.
 
 최근 본인 확인을 통과한 기존 계정의 관리 화면은 서버의 `capabilities`를 따르며 현재 `selfExport:true`, `childManagement:true`, `selfClosure:false`, `guardianEnrollment:false`다. 본인 기록과 서버가 확인한 연결 아동만 표시한다. 자기 탈퇴·삭제 버튼은 항상 비활성이고 폐쇄 계정의 후속 권리 절차가 준비되지 않았음을 설명한다. 활성 기존 계정의 재인증 준비는 이 제한을 해제하지 않는다. 아동 ID나 동의 대상 정보를 자유롭게 입력해서 연결하는 UI는 없다.
 

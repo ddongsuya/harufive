@@ -24,7 +24,8 @@
     "build:preview": "node scripts/preview-worker.mjs build",
     "check:preview": "node scripts/preview-worker.mjs dry-run",
     "build:connected-preview": "node scripts/preview-worker.mjs connected-build",
-    "check:connected-preview": "node scripts/preview-worker.mjs connected-dry-run"
+    "check:connected-preview": "node scripts/preview-worker.mjs connected-dry-run",
+    "db:preview-files": "node scripts/preview-db-schema.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",

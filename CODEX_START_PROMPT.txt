@@ -1,5 +1,7 @@
 이 폴더의 '하루다섯' 웹게임을 이어서 개발해 주세요.
 
+2026-10-21 갱신: 아래 초기 인계 설명보다 docs/codex-verification-2026-10-21.md의 실제 후속 상태를 우선하세요. 사용자가 Cloudflare 정적 보호 시험본 배포·secret 저장·비밀번호 입장과 harufive-preview-db 생성을 완료했습니다. docs/preview-database-setup.md의 새 빈 D1 초기화·DB 바인딩·연결용 코드 적용이 다음 단계이며 실제 로그인·첫 가입·게임 저장은 미완료입니다. Cloudflare 관리 콘솔과 시험 원점의 도구 접근 제한은 다른 수단으로 우회하지 않고 사용자가 직접 작업합니다. 비밀번호 생성 도구의 사용 후 화면·DOM·클립보드도 읽지 마세요.
+
 먼저 AGENTS.md, CODEX_HANDOFF.md, README.md, docs/age-eligibility.md, docs/children-launch-plan.md와 최신 검증 기록 docs/codex-verification-2026-10-20.md를 읽고 실제 코드와 현재 상태를 확인해 주세요.
 
 목표는 매일 5문제, 분야별 육각형 통계, 정답 수와 풀이 시간에 따른 주간 순위, 귀여운 2D 도트 캐릭터 수집 게임의 정식 출시입니다. 기본 토끼만 무료 제공하고 나머지 캐릭터는 플레이로 얻는 게임 코인으로 구매합니다. 운영 문의는 limjm900202@gmail.com이며 가입·이용 대상은 사용자의 최신 결정에 따라 만 14세 이상입니다. 이전의 만 14세 미만 포함 B안은 대체됐습니다. 만 14세 이상을 모두 성인으로 취급하지 마세요.

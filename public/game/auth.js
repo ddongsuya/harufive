@@ -26,6 +26,7 @@ export function normalizeAuthStatus(payload){
   }:null;
   return {
     authenticated:payload.authenticated,account,
+    sites:{enabled:payload.sites?.enabled===true},
     providers:SOCIAL_PROVIDERS.map(provider=>{
       const supplied=payload.providers.find(candidate=>candidate?.id===provider.id);
       return {...provider,enabled:supplied?.enabled===true,reason:supplied?.enabled===true?'ready':'not_configured'};

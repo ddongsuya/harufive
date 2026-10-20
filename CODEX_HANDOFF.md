@@ -87,7 +87,7 @@
 
 이 프로젝트의 기존 검증 환경은 **Linux + Node 24.19.0**이다. 인수인계 후에는 Node 24 계열 환경에서 설치·검사를 재현하는 것을 권장한다. Windows 대응 코드는 있으나 네이티브 Windows에서 검증을 완료한 것은 아니다.
 
-주의: 현재 `package.json`과 기존 README의 최소 버전은 Node 22.13.0이다. 그러나 DB 테스트는 `StatementSync.columns()`를 사용하며, 설치된 Node 타입 문서는 이 메서드를 22.16.0부터로 표기한다. **22.13.0으로 전체 테스트가 된다고 보장하지 않는다.** Node 22를 사용할 때는 최소 22.16.0 이상의 해당 기능 지원을 확인하고, 엔진·README 문구의 정합성을 첫 개발 작업에서 정리한다. 이번 인수인계는 이 실행 조건을 문서화했으며 앱 의존성 버전을 변경하지 않았다.
+인수인계 당시 `package.json`과 README의 최소 버전은 Node 22.13.0이었다. **Codex 후속 작업에서 두 파일과 lockfile을 22.16.0 이상으로 정리하고 Windows + Node 24.13.0에서 검증했다.** 아래는 수정 전 불일치의 근거다. 그러나 DB 테스트는 `StatementSync.columns()`를 사용하며, 설치된 Node 타입 문서는 이 메서드를 22.16.0부터로 표기한다. **22.13.0으로 전체 테스트가 된다고 보장하지 않는다.** Node 22를 사용할 때는 최소 22.16.0 이상의 해당 기능 지원을 확인하고, 엔진·README 문구의 정합성을 첫 개발 작업에서 정리한다. 이번 인수인계는 이 실행 조건을 문서화했으며 앱 의존성 버전을 변경하지 않았다.
 
 프로젝트 루트, 즉 `package.json`이 있는 `haru-five` 폴더에서 순서대로 실행한다.
 
@@ -157,3 +157,11 @@ B안에는 아동 대상 운영에 적합한 별도 호스팅이 필요하다. W
 PC에서는 ZIP을 풀고 `package.json`이 있는 `haru-five` 폴더를 Codex의 작업 폴더로 선택한 다음 `CODEX_START_PROMPT.txt`를 붙여 넣는다. CLI·IDE를 사용한다면 동일한 프로젝트 폴더를 작업 대상으로 연다. 구체적인 화면 구성은 사용하는 제품 버전의 [공식 시작 안내](https://learn.chatgpt.com/docs/quickstart)를 따른다.
 
 모바일에서 원격으로 이어가려면 먼저 웹·데스크톱에서 GitHub 저장소를 연결한 Codex Cloud 환경을 마련하는 방법이 있다. 원격 저장소는 현재 준비한 ZIP을 실제로 반영한 하루다섯 전용 저장소여야 하며, 다른 프로젝트나 오래된 원격 소스를 선택하지 않는다. 이번 작업은 새 GitHub 저장소를 만들거나 업로드하거나 Cloud 작업을 시작하지 않았다. [Codex Cloud 공식 안내](https://learn.chatgpt.com/docs/cloud)
+
+## 11. Codex 후속 작업 — 2026-10-20
+
+Windows + Node 24.13.0에서 원본 설치·156개 테스트·검사·빌드를 재현했다. Node 최소 버전 정리, 독립 인증 어댑터, 영속 로컬 SQLite와 로컬 미리보기, 독립 UI 경계를 추가한 뒤 **164개 테스트·타입 검사·기존 빌드 통과**를 확인했다. `npm run dev:local`로 127.0.0.1:5174를 열 수 있다. 실제 로그인과 어린이 가입을 흉내 내지 않으며 세 버튼은 준비 상태다.
+
+사용자가 GitHub `ddongsuya/harufive`를 개발 저장소로 지정했다. 원본을 로컬 main에 보존하고 작업 브랜치 `codex/local-standalone-foundation`에서 수정했다. 공개 저장소로의 README 업로드는 자동 승인 검토가 운영·보안 설명·연락처의 공개 범위 확인 부족을 이유로 거부해 실행되지 않았다. 다른 전송 경로로 우회하지 않았다. 원격은 아직 비어 있으며 공개할 소스·문서 범위를 사용자가 확인해야 한다.
+
+실제 변경·검증은 `docs/codex-verification-2026-10-20.md`, 실행은 `docs/local-development.md`, 보호자 동의·삭제의 다음 구현 순서는 `docs/guardian-implementation-plan.md`를 따른다. 독립 Worker 운영 진입점·호스팅 설정·보호자 서버 기능·외부 확인·예약 삭제는 다음 작업이며, `HARU_REGISTRATION_OPEN=false`, `guardianReady=false`를 유지한다.

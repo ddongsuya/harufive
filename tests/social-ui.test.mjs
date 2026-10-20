@@ -12,7 +12,7 @@ const snapshot=()=>({serverNow:NOW,today:DAY,state:{
   totals:{dailyCount:0,questionCount:0,correctCount:0,practiceCount:0},ranking:{week:'2026-10-19',rows:[],me:null,rank:null,total:0,participated:false,correct:0,score:0,totalTimeMs:null},
 }});
 function authStatus({authenticated=true,enabled=false,linked=[]}={}){
-  return {authenticated,account:authenticated?{provider:'chatgpt',linkedProviders:linked}:null,
+  return {authenticated,sites:{enabled:true},account:authenticated?{provider:'chatgpt',linkedProviders:linked}:null,
     providers:['kakao','google','naver'].map(id=>({id,enabled,reason:enabled?'ready':'not_configured'})),registration:{open:false}};
 }
 const anonymous=()=>reply({code:'SIGN_IN_REQUIRED',message:'로그인해 주세요.'},401);
@@ -121,4 +121,18 @@ test('client accepts no account identifiers, extra providers or arbitrary naviga
   assert.equal(status.providers.length,3);assert.doesNotMatch(JSON.stringify(status),/private-id|private@|client_secret|invented/);
   for(const url of ['javascript:alert(1)','https://accounts.google.com.attacker.example/o/oauth2/v2/auth','https://accounts.google.com/o/oauth2/v2/auth?response_type=token','https://accounts.google.com:444/o/oauth2/v2/auth',googleURL+'#secret'])assert.throws(()=>validateLoginDestination(url,'google'));
   assert.throws(()=>validateLoginDestination('//attacker.example','chatgpt'));
+});
+
+test('standalone and unknown auth capabilities hide the Sites sign-in path', async () => {
+  for (const sites of [{ enabled: false }, undefined]) {
+    const h = await releaseHarness({ handler: anonymous,
+      authHandler: () => reply({ ...authStatus({ authenticated: false }), sites }),
+    });
+    try {
+      assert.doesNotMatch(h.app.innerHTML, /data-action="auth-sites"|signin-with-chatgpt/);
+      assert.match(h.app.innerHTML, /카카오/);
+      assert.equal(h.navigations.length, 0);
+      assert.deepEqual(auditMarkup(h.markup()).issues, []);
+    } finally { h.restore(); }
+  }
 });

@@ -55,4 +55,5 @@ next-env.d.ts
 /.agents/
 /.codex/
 /outputs/
+/.local/
 /work/

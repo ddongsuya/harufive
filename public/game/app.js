@@ -203,7 +203,7 @@ function connectionBanner(){
 }
 function entryView(){
   const login=connection==='signin';
-  return `<main class="release-entry" id="main"><div class="release-entry-brand">${brand()}</div><section class="card release-entry-card">${avatar({...DEFAULT_EQUIPPED,background:'transparent',pose:'happy'},'entry-avatar')}<span class="tag neutral">출시 준비 · 0.5.1</span><h1>${login?'작은 도전, 나만의 친구와.':connection==='error'?'잠깐, 연결을 확인해 주세요.':'나의 정원을 여는 중이에요.'}</h1><p>${login?'하루 다섯 문제를 풀고, 나의 기록과 도트 친구들을 모아요. 로그인하면 계정에 기록을 간직할 수 있어요.':connection==='error'?escape(connectionError):'로그인 상태와 저장된 기록을 확인하고 있어요.'}</p>${login?`${authFeedback()}${socialLoginOptions()}<div class="login-divider"><span>개발 중인 게임 이어가기</span></div><a class="btn secondary full" data-action="auth-sites" href="${escape(SITES_SIGN_IN)}" target="_top" ${authBusy?'aria-disabled="true"':''}>ChatGPT 계정으로 시작하기 ${icon('arrow',true)}</a><small>게임 이용은 무료예요. 구름토끼부터 함께해요.</small><button class="text-link" data-action="release-info">로그인 · 출시 준비 안내</button>`:connection==='error'?'<button class="btn full" data-action="sync">다시 연결하기</button>':'<div class="entry-loading" role="status">기록을 불러오고 있어요…</div>'}</section><p class="release-entry-foot">매일 5문제 · 주간 랭킹 · 나만의 도트 친구</p><div class="release-entry-contact">${supportContact()}</div></main>`;
+  return `<main class="release-entry" id="main"><div class="release-entry-brand">${brand()}</div><section class="card release-entry-card">${avatar({...DEFAULT_EQUIPPED,background:'transparent',pose:'happy'},'entry-avatar')}<span class="tag neutral">출시 준비 · 0.5.1</span><h1>${login?'작은 도전, 나만의 친구와.':connection==='error'?'잠깐, 연결을 확인해 주세요.':'나의 정원을 여는 중이에요.'}</h1><p>${login?'하루 다섯 문제를 풀고, 나의 기록과 도트 친구들을 모아요. 로그인하면 계정에 기록을 간직할 수 있어요.':connection==='error'?escape(connectionError):'로그인 상태와 저장된 기록을 확인하고 있어요.'}</p>${login?`${authFeedback()}${socialLoginOptions()}${authStatus?.sites.enabled?`<div class="login-divider"><span>개발 중인 게임 이어가기</span></div><a class="btn secondary full" data-action="auth-sites" href="${escape(SITES_SIGN_IN)}" target="_top" ${authBusy?'aria-disabled="true"':''}>ChatGPT 계정으로 시작하기 ${icon('arrow',true)}</a>`:''}<small>게임 이용은 무료예요. 구름토끼부터 함께해요.</small><button class="text-link" data-action="release-info">로그인 · 출시 준비 안내</button>`:connection==='error'?'<button class="btn full" data-action="sync">다시 연결하기</button>':'<div class="entry-loading" role="status">기록을 불러오고 있어요…</div>'}</section><p class="release-entry-foot">매일 5문제 · 주간 랭킹 · 나만의 도트 친구</p><div class="release-entry-contact">${supportContact()}</div></main>`;
 }
 function authFeedback(){
   const notice=authError?{kind:'error',text:authError}:authNotice;
@@ -232,6 +232,7 @@ async function beginLogin(provider,intent='login'){
   if(authBusy||disposed)return;
   if(logoutUnconfirmed){toast('먼저 로그아웃 처리 결과를 다시 확인해 주세요.');return;}
   if(pending||transaction||syncing){toast('먼저 진행 중인 요청의 결과를 확인해 주세요.');return;}
+  if(provider==='chatgpt'&&!authStatus?.sites.enabled)return;
   if(provider!=='chatgpt'&&!authStatus?.providers.find(item=>item.id===provider)?.enabled)return;
   if(intent==='link'&&!state)return;
   authBusy=true;authError='';authNotice=null;render();setRequestControls();

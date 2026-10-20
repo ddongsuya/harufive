@@ -91,12 +91,12 @@ async function rateLimit(db, userId, timestamp, now) {
  * request field/header never chooses an account. An expected public player ID
  * only detects a stale tab after switching accounts and cannot grant access.
  * @param {Request} request
- * @param {{ action?: string, userId?: string, resolveUserId?: Function, db?: import('@cloudflare/workers-types').D1Database, now?: () => number, makeService?: Function }} [options]
+ * @param {{ action?: string, userId?: string, resolveUserId?: Function, db?: import('@cloudflare/workers-types').D1Database, now?: () => number, makeService?: Function, signInUrl?: string }} [options]
  */
-export async function handleGameRequest(request, { action, userId, resolveUserId, db, now = Date.now, makeService = createGameService } = {}) {
+export async function handleGameRequest(request, { action, userId, resolveUserId, db, now = Date.now, makeService = createGameService, signInUrl = '/signin-with-chatgpt?return_to=%2F' } = {}) {
   const validIdentity = id => typeof id === 'string' && !!id.trim() && id.length <= 200;
   const signInRequired = () => rejected(401, 'SIGN_IN_REQUIRED', '로그인하고 나만의 기록을 이어가세요.', {
-      signInUrl: '/signin-with-chatgpt?return_to=%2F',
+      signInUrl,
     });
   if (!validIdentity(userId) && typeof resolveUserId !== 'function') {
     return signInRequired();

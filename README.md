@@ -10,6 +10,17 @@ Codex로 이어서 개발할 때는 [인수인계](CODEX_HANDOFF.md)를 먼저 �
 
 준비한 소스의 화면 표시: **출시 준비 · 0.5.1**. 기존 v0.4.0 도트 캐릭터, 꾸미기, 배경음과 효과음, 캘린더 알림 흐름을 유지합니다. 최초 토끼만 기본 제공하며 다른 캐릭터는 코인으로 구매합니다.
 
+## Codex 로컬 개발 후속 작업 (2026-10-20)
+
+- 개발 저장소로 `https://github.com/ddongsuya/harufive`를 지정했다. 로컬 Git의 `origin`에 연결했으며 공개 업로드는 별도 확인 단계다.
+- Windows + Node 24.13.0에서 인계 원본 156개 테스트·검사·빌드를 재현했다. 후속 변경 후 **164개 테스트 통과**, 타입 검사와 기존 Sites 빌드 통과.
+- 최소 런타임은 Node 22.16.0 이상인 22.x 또는 24 이상이다. `StatementSync.columns()`를 사용하므로 이전 22.13 표기를 수정했고 패키지 버전은 변경하지 않았다. Node 22.16.0 자체의 전체 실행 검증은 아직 하지 않았다.
+- `npm run db:local`로 별도 SQLite DB를 준비하고 `npm run dev:local`로 **http://127.0.0.1:5174**에서 현재 화면을 확인할 수 있다. 재시작해도 로컬 DB를 보존한다. 기본 `npm run dev`는 기존 Sites 개발 경로다.
+- 독립용 `server/standalone-http.mjs`는 기존 플랫폼 인증 헤더·예약 로그인 경로를 사용하지 않고 자체 세션만 인정한다. `HARU_REGISTRATION_OPEN=true`가 잘못 전달되어도 독립 경로의 신규 가입은 닫혀 있다.
+- 로컬 미리보기는 실제 소셜 키·로그인을 대신하지 않는다. 테스트 계정을 자동 생성하지 않으며 로그인 버튼은 준비 상태를 표시한다. 게임 플레이는 실제 서비스·SQLite 통합 테스트로 검증했다.
+
+실행 방법과 연결 범위는 [로컬 개발 안내](docs/local-development.md), 실제 결과는 [Codex 검증 기록](docs/codex-verification-2026-10-20.md), 다음 기능의 구현 계약은 [보호자 동의·삭제 구현 순서](docs/guardian-implementation-plan.md)를 따른다. 기존 운영 사이트를 변경하거나 독립 호스팅에 배포한 작업은 아니다.
+
 ## 이번 버전에서 달라진 점
 
 | 기능 | v0.5.1 동작 |
@@ -127,7 +138,7 @@ Sites에서 인증용 이메일·이름을 전달받을 수 있지만 게임 DB�
 
 ## 개발·검증·배포
 
-Node 22.13 이상과 저장소의 공식 설치 스크립트를 사용합니다. 로컬 의존성 설치는 `npm run install:ci`, 정적 검사 `npm run check`, 검증 `npm test`, 빌드 `npm run build`입니다. 설치·빌드는 Sites의 제공 도구로 실행할 수도 있습니다. 모의 DOM 테스트는 파일별 Node 프로세스 격리가 필요합니다. 제한된 실행 환경에서 파일 단위 결과만 표시되면 개별 파일을 `node tests/server-http.test.mjs`처럼 직접 실행해 실제 케이스를 확인합니다.
+Node **22.16.0 이상인 22.x 또는 Node 24 이상**(Node 24 권장; 23.x 제외)과 저장소의 공식 설치 스크립트를 사용합니다. 로컬 의존성 설치는 `npm run install:ci`, 정적 검사 `npm run check`, 검증 `npm test`, 빌드 `npm run build`입니다. 설치·빌드는 Sites의 제공 도구로 실행할 수도 있습니다. 모의 DOM 테스트는 파일별 Node 프로세스 격리가 필요합니다. 제한된 실행 환경에서 파일 단위 결과만 표시되면 개별 파일을 `node tests/server-http.test.mjs`처럼 직접 실행해 실제 케이스를 확인합니다.
 
 스키마를 바꾸면 `npm run db:generate` 후 생성 SQL과 메타데이터를 검토합니다. 이미 적용한 마이그레이션 파일은 고치지 않고 새 마이그레이션을 추가합니다. 실제 배포는 같은 Sites 프로젝트의 소스를 먼저 저장하고 그 정확한 소스에서 만든 Worker 빌드와 SQL 마이그레이션으로 진행합니다. `.openai/hosting.json`의 프로젝트 ID와 `DB` 바인딩을 유지합니다.
 

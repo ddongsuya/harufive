@@ -54,7 +54,7 @@ export async function releaseHarness({handler,authHandler=null,legacy=null,hash=
   assign('requestAnimationFrame',fn=>fn());assign('matchMedia',()=>({matches:true}));
   assign('fetch',async(url,options)=>{
     const call={url,options,body:options.body?JSON.parse(options.body):null};calls.push(call);
-    if(url.startsWith('/api/auth/'))return authHandler?authHandler(call,{now:now+elapsed}):reply({authenticated:true,account:{provider:'chatgpt',linkedProviders:[]},providers:['kakao','google','naver'].map(id=>({id,enabled:false,reason:'not_configured'})),registration:{open:false}});
+    if(url.startsWith('/api/auth/'))return authHandler?authHandler(call,{now:now+elapsed}):reply({authenticated:true,sites:{enabled:true},account:{provider:'chatgpt',linkedProviders:[]},providers:['kakao','google','naver'].map(id=>({id,enabled:false,reason:'not_configured'})),registration:{open:false}});
     return handler(call,{now:now+elapsed});
   });
   let module;

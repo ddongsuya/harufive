@@ -621,15 +621,20 @@ async function endSession(request, options, resumeSites) {
  * required only for start/callback. fetch/clock/timeout injections are trusted
  * server-side dependencies used by SQL + signed-JWT integration tests.
  * @param {Request} request
- * @param {{action?: string, provider?: string, db?: import('@cloudflare/workers-types').D1Database, env?: any, sitesUserId?: string, sitesEmail?: string, now?: () => number, fetch?: typeof globalThis.fetch, timeoutMs?: number}} [options]
+ * @param {{action?: string, provider?: string, db?: import('@cloudflare/workers-types').D1Database, env?: any, sitesUserId?: string, sitesEmail?: string, now?: () => number, fetch?: typeof globalThis.fetch, timeoutMs?: number, sitesEnabled?: boolean}} [options]
  * @returns {Promise<Response>}
  */
 export async function handleAuthRequest(request, {
   action, provider: providerId, db, env = {}, sitesUserId, sitesEmail, now = Date.now,
-  fetch: fetcher = globalThis.fetch, timeoutMs = AUTH_LIMITS.upstreamTimeoutMs,
+  fetch: fetcher = globalThis.fetch, timeoutMs = AUTH_LIMITS.upstreamTimeoutMs, sitesEnabled = true,
 } = {}) {
   const definition = { status: 'GET', start: 'POST', callback: 'GET', logout: 'POST', 'sites-start': 'POST' };
   try {
+    if (!sitesEnabled) {
+      sitesUserId = undefined;
+      sitesEmail = undefined;
+      if (action === 'sites-start') throw new AuthError(404, 'NOT_FOUND');
+    }
     if (!Object.hasOwn(definition, action) || ((action === 'start' || action === 'callback') && !AUTH_PROVIDER_IDS.includes(providerId))) {
       throw new AuthError(404, 'NOT_FOUND', 'invalid_request');
     }
@@ -650,6 +655,7 @@ export async function handleAuthRequest(request, {
       const resolved = await resolveInternal(request, options);
       return json({
         authenticated: !!resolved,
+        sites: { enabled: sitesEnabled },
         account: resolved ? { provider: resolved.provider, linkedProviders: resolved.linkedProviders } : null,
         providers: AUTH_PROVIDER_IDS.map(id => {
           const config = providerConfig(id, env);

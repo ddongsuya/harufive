@@ -753,7 +753,7 @@ async function localAuthentication(request, options, register) {
   const { db, now } = options;
   const body = await readJson(request, register ? ['username','password','nickname','ageConfirmed','policyAccepted','policyVersion'] : ['username','password']);
   if (typeof body.username !== 'string' || !/^[a-z0-9_]{4,24}$/.test(body.username) ||
-      typeof body.password !== 'string' || body.password.length < 15 || body.password.length > 128) {
+      typeof body.password !== 'string' || body.password.length < 8 || body.password.length > (register ? 16 : 128)) {
     throw new AuthError(400, 'INVALID_REQUEST');
   }
   let nickname;

@@ -12,7 +12,7 @@ const loggedIn = { loggedIn: true, accounts: [{ id: accountId }] };
 
 async function fixture({ migrated = false, initialNames = null,
   authCheck = { body: { loggedIn: false } }, authVerify = { body: loggedIn },
-  loginExitCode = 0, dbBeforeExitCode = 0, dbAfterExitCode = 0 } = {}) {
+  loginExitCode = 0, dbBeforeExitCode = 0, dbAfterExitCode = 0, deployExitCode = 0 } = {}) {
   const base = path.join(project, '.local', 'signup-deployment-tests');
   await mkdir(base, { recursive: true });
   const directory = await mkdtemp(path.join(base, 'run-'));
@@ -39,7 +39,10 @@ if (args[0] === 'login') {
   process.stdout.write('Successfully logged in.\\n');
   process.exit(${JSON.stringify(loginExitCode)});
 }
-if (args[0] === 'deploy') process.exit(0);
+if (args[0] === 'deploy') {
+  process.stdout.write('Worker Startup Time: 8 ms\\nYour Worker has access to the following bindings:\\n');
+  process.exit(${JSON.stringify(deployExitCode)});
+}
 if (args[0] === 'd1' && args[1] === 'migrations' && args[2] === 'apply') process.exit(0);
 if (args[0] === 'd1' && args[1] === 'execute') {
   const first = !previous.some(call => call[0] === 'd1' && call[1] === 'execute');
@@ -212,7 +215,8 @@ test('the result file records stages and exit status without raw output or crede
     ...loggedIn, email: emailMarker, authentication: { oauth_token: sensitiveMarker },
   } } }));
   assert.equal(result.status, 0, result.stderr);
-  assert.deepEqual(Object.keys(result.receipt).sort(), ['accountVerified', 'commands', 'completed', 'format', 'stage']);
+  assert.deepEqual(Object.keys(result.receipt).sort(), ['accountVerified', 'commands', 'completed', 'format', 'nodeVersion', 'stage']);
+  assert.equal(result.receipt.nodeVersion, process.version);
   assert.equal(result.receipt.format, 'harufive-deployment-result-v1');
   assert.equal(result.receipt.completed, true);
   assert.equal(result.receipt.accountVerified, true);
@@ -228,6 +232,27 @@ test('the result file records stages and exit status without raw output or crede
   assert.equal(result.receiptText.includes('Successfully logged in.'), false);
   assert.equal(result.receiptText.includes('oauth_token'), false);
   assert.equal(result.receiptText.includes('accounts'), false);
+});
+
+test('the Windows launcher pins the preparation runtime and preserves its exit status', async () => {
+  const f = await fixture();
+  const launcher = await readFile(path.join(f.directory, '배포하기.cmd'), 'utf8');
+  assert.ok(launcher.includes('"' + process.execPath.replaceAll('%', '%%') + '" "%~dp0deploy.mjs"'));
+  assert.match(launcher, /setlocal DisableDelayedExpansion/);
+  assert.match(launcher, /set "HARU_DEPLOY_EXIT=%ERRORLEVEL%"\r\npause\r\nexit \/b %HARU_DEPLOY_EXIT%/);
+});
+
+test('a deploy process crash after startup output never reports completion', async () => {
+  const result = await run(await fixture({ migrated: true, deployExitCode: 3221226505 }));
+  assert.equal(result.status, 1);
+  assert.equal(result.receipt.completed, false);
+  assert.equal(result.receipt.stage, 'deploy');
+  assert.match(result.stdout, /Worker Startup Time: 8 ms/);
+  assert.doesNotMatch(result.stdout, /배포 명령 완료/);
+  if (process.platform === 'win32') {
+    assert.equal(result.receipt.commands.at(-1).exitCode, 3221226505);
+    assert.match(result.stderr, /0xC0000409/);
+  }
 });
 
 test('a failed file check replaces a previous success receipt before any command', async () => {

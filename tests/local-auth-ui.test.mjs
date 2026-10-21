@@ -6,7 +6,7 @@ import { releaseHarness, reply } from './helpers/release-controller-harness.mjs'
 import { auditMarkup } from './helpers/markup-source.mjs';
 import { policyDialog, POLICY_NOTICE_VERSION } from '../public/game/policy-views.js';
 
-const PASSWORD=' synthetic password with spaces ';
+const PASSWORD=' trial pass ';
 const GOOGLE='https://accounts.google.com/o/oauth2/v2/auth?response_type=code&state=local-fixture-state&nonce=local-fixture-nonce&code_challenge_method=S256&code_challenge=local-fixture-challenge';
 const consent={ageConfirmed:true,policyAccepted:true,policyVersion:PREVIEW_POLICY_VERSION};
 const anonymous=()=>reply({code:'SIGN_IN_REQUIRED'},401);
@@ -42,7 +42,7 @@ test('local auth capabilities are explicit and strip credentials while keeping l
   const current=normalizeAuthStatus(status({authenticated:true,account:{provider:'local',linkedProviders:['local','google'],username:'secret-user',password:PASSWORD}}));
   assert.deepEqual(current.account,{provider:'local',linkedProviders:['local','google']});
   assert.equal(providerName('local'),'아이디 로그인');
-  assert.doesNotMatch(JSON.stringify(current),/secret-user|synthetic password/);
+  assert.doesNotMatch(JSON.stringify(current),/secret-user|trial pass/);
 });
 
 test('login form is accessible, uses POST and disables Kakao and Naver even with stale availability',async()=>{
@@ -52,12 +52,20 @@ test('login form is accessible, uses POST and disables Kakao and Naver even with
     assert.equal(form.attrs.method,'post');assert.equal(form.attrs.action,'/api/auth/local/login');
     assert.equal(h.query('#auth-password').attrs.type,'password');
     assert.equal(h.query('#auth-password').attrs.autocomplete,'current-password');
+    assert.equal(h.query('#auth-password').attrs.minlength,'8');
+    assert.equal(h.query('#auth-password').attrs.maxlength,'128');
+    assert.match(h.query('#auth-password-help').textContent,/가입할 때 사용한 비밀번호/);
     assert.equal(h.query('#auth-username').attrs.autocomplete,'username');
     assert.match(h.app.innerHTML,/Google로 로그인/);
     for(const provider of ['kakao','naver'])assert.equal(await h.click('auth-login',{provider}),false);
     assert.equal(posts(h).length,0);assert.deepEqual(auditMarkup(h.markup()).issues,[]);
     await h.click('auth-mode',{mode:'register'});
     assert.equal(h.query('#auth-password').attrs.autocomplete,'new-password');
+    for(const id of ['auth-password','auth-password-confirm']){
+      assert.equal(h.query('#'+id).attrs.minlength,'8');
+      assert.equal(h.query('#'+id).attrs.maxlength,'16');
+    }
+    assert.match(h.query('#auth-password-help').textContent,/8~16자/);
     assert.match(h.app.innerHTML,/비밀번호 찾기를 지원하지 않아요/);
     await h.click('policy-open',{kind:'privacy'});assert.equal(h.modal.open,true);
     assert.match(h.modal.innerHTML,/비밀번호 원문은 저장하지 않아요/);
@@ -86,8 +94,8 @@ test('local registration requires valid fields, matching password and both confi
     await h.click('auth-mode',{mode:'register'});
     for(const [input,message] of [
       [{username:'UpperCASE'},/아이디는 영문 소문자/],
-      [{password:'short'},/비밀번호는 공백을 포함해 15~128자/],
-      [{password:'a'.repeat(129)},/비밀번호는 공백을 포함해 15~128자/],
+      [{password:'a'.repeat(7)},/비밀번호는 공백을 포함해 8~16자/],
+      [{password:'a'.repeat(17)},/비밀번호는 공백을 포함해 8~16자/],
       [{nickname:'<script>'},/닉네임은 한글/],
       [{confirm:'a different password'},/비밀번호 확인이 일치하지/],
       [{age:false},/확인 항목을 모두 선택/],
@@ -95,7 +103,7 @@ test('local registration requires valid fields, matching password and both confi
     ]){
       fill(h,input);await h.click('auth-local-submit');assert.match(h.app.innerHTML,message);
       assert.equal(posts(h).length,0);
-      assert.doesNotMatch(h.app.innerHTML,/synthetic password|value="a different password"|<script>/);
+      assert.doesNotMatch(h.app.innerHTML,/trial pass|value="a different password"|<script>/);
     }
     assert.equal(h.writes.length,0);assert.equal(h.navigations.length,0);
   }finally{h.restore();}
@@ -115,10 +123,56 @@ test('local registration sends exact values without trimming the password and re
     assert.equal(posts(h).length,1);assert.equal(posts(h)[0].options.method,'POST');
     assert.equal(posts(h)[0].options.credentials,'same-origin');assert.equal(posts(h)[0].options.cache,'no-store');
     assert.match(h.app.innerHTML,/오늘의 도전 시작/);
-    assert.doesNotMatch(h.app.innerHTML,/synthetic password/);
-    assert.equal(h.writes.length,0);assert.equal(h.navigations.length,0);assert.doesNotMatch(location.href,/trial_user|synthetic/);
+    assert.doesNotMatch(h.app.innerHTML,/trial pass/);
+    assert.equal(h.writes.length,0);assert.equal(h.navigations.length,0);assert.doesNotMatch(location.href,/trial_user|trial pass/);
     await h.click('nav',{view:'profile'});assert.match(h.app.innerHTML,/아이디 로그인으로 이용 중/);
   }finally{h.restore();}
+});
+
+test('signup accepts exactly 8 through 16 characters while rejecting 7 and 17 before posting',async()=>{
+  for(const [password,accepted] of [['a'.repeat(7),false],[' abcdef ',true],[' 12345678901234 ',true],['a'.repeat(17),false]]){
+    let signedIn=false;
+    const h=await releaseHarness({handler:()=>signedIn?reply(snapshot()):anonymous(),authHandler:call=>{
+      if(call.url==='/api/auth/status')return reply(status({authenticated:signedIn,account:signedIn?{provider:'local',linkedProviders:['local']}:null}));
+      assert.equal(call.url,'/api/auth/local/register');
+      assert.equal(call.body.password,password);
+      signedIn=true;return reply({authenticated:true});
+    }});
+    try{
+      await h.click('auth-mode',{mode:'register'});fill(h,{password});
+      await h.click('auth-local-submit');
+      assert.equal(posts(h).length,accepted?1:0,`signup length ${password.length}`);
+      if(accepted)assert.match(h.app.innerHTML,/오늘의 도전 시작/);
+      else{
+        assert.match(h.app.innerHTML,/비밀번호는 공백을 포함해 8~16자/);
+        assert.equal(h.document.activeElement.id,'auth-password');
+      }
+      assert.equal(h.writes.length,0);
+    }finally{h.restore();}
+  }
+});
+
+test('login preserves earlier long passwords and uses its own 8 through 128 character bounds',async()=>{
+  for(const [password,accepted] of [['a'.repeat(7),false],[' abcdef ',true],[' old long password with spaces ',true],['a'.repeat(128),true],['a'.repeat(129),false]]){
+    let signedIn=false;
+    const h=await releaseHarness({handler:()=>signedIn?reply(snapshot()):anonymous(),authHandler:call=>{
+      if(call.url==='/api/auth/status')return reply(status({authenticated:signedIn,account:signedIn?{provider:'local',linkedProviders:['local']}:null}));
+      assert.equal(call.url,'/api/auth/local/login');
+      assert.deepEqual(call.body,{username:'trial_user',password});
+      signedIn=true;return reply({authenticated:true});
+    }});
+    try{
+      assert.doesNotMatch(h.query('#auth-password-help').textContent,/8~16/);
+      fill(h,{password});await h.click('auth-local-submit');
+      assert.equal(posts(h).length,accepted?1:0,`login length ${password.length}`);
+      if(accepted)assert.match(h.app.innerHTML,/오늘의 도전 시작/);
+      else{
+        assert.match(h.app.innerHTML,/가입할 때 사용한 비밀번호를 입력해 주세요/);
+        assert.equal(h.document.activeElement.id,'auth-password');
+      }
+      assert.equal(h.writes.length,0);
+    }finally{h.restore();}
+  }
 });
 
 test('password login accepts Enter, sends no signup claims, and shows a generic credential failure',async()=>{
@@ -132,7 +186,7 @@ test('password login accepts Enter, sends no signup claims, and shows a generic 
     await h.app.fire('submit',{target:h.query('#local-auth-form'),preventDefault(){prevented=true;}});
     assert.equal(prevented,true);assert.equal(posts(h).length,1);
     assert.match(h.app.innerHTML,/아이디 또는 비밀번호를 확인/);
-    assert.doesNotMatch(h.app.innerHTML,/private backend|synthetic password/);
+    assert.doesNotMatch(h.app.innerHTML,/private backend|trial pass/);
     assert.equal(h.query('#auth-password').value,'');assert.equal(h.query('#auth-username').value,'trial_user');
     assert.equal(h.writes.length,0);
   }finally{h.restore();}
@@ -211,7 +265,7 @@ test('mode changes clear passwords and malformed local availability cannot expos
   try{
     fill(h);await h.click('auth-mode',{mode:'register'});
     assert.equal(h.query('#auth-password').value,'');assert.equal(h.query('#auth-password-confirm').value,'');
-    assert.doesNotMatch(h.app.innerHTML,/synthetic password/);
+    assert.doesNotMatch(h.app.innerHTML,/trial pass/);
     assert.equal(h.query('#auth-username').value,'trial_user');
   }finally{h.restore();}
   const closed=await releaseHarness({handler:anonymous,authHandler:()=>reply(status({registration:{open:false,previewOpen:false}}))});

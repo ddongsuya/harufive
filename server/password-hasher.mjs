@@ -6,10 +6,12 @@ import { Buffer } from 'node:buffer';
 const PREFIX = 'scrypt-v1$65536$8$2$';
 const FORMAT = /^scrypt-v1\$65536\$8\$2\$([a-f0-9]{32})\$([a-f0-9]{64})$/;
 const OPTIONS = Object.freeze({ N: 65536, r: 8, p: 2, maxmem: 80 * 1024 * 1024 });
-const passwordValid = value => typeof value === 'string' && value.length >= 15 && value.length <= 128;
+// New passwords follow the signup limit; verification accepts the earlier
+// maximum so an existing account never loses access after this policy change.
+const passwordValid = (value, maximum = 128) => typeof value === 'string' && value.length >= 8 && value.length <= maximum;
 
 export function hashPassword(password) {
-  if (!passwordValid(password)) throw new Error('PASSWORD_FORMAT');
+  if (!passwordValid(password, 16)) throw new Error('PASSWORD_FORMAT');
   const salt = randomBytes(16);
   const result = scryptSync(password, salt, 32, OPTIONS);
   return `${PREFIX}${salt.toString('hex')}$${result.toString('hex')}`;
@@ -66,7 +68,7 @@ export class PasswordHasher {
       let offset = 0;
       for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
       const data = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
-      if (!data || !passwordValid(data.password) || !['hash', 'verify'].includes(data.action) ||
+      if (!data || !passwordValid(data.password, data.action === 'hash' ? 16 : 128) || !['hash', 'verify'].includes(data.action) ||
           (data.action === 'verify' && (typeof data.encodedHash !== 'string' || !FORMAT.test(data.encodedHash)))) {
         return new Response(null, { status: 400, headers });
       }

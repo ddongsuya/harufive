@@ -10,7 +10,7 @@ import { createGameService } from '../server/game-service.mjs';
 
 const ORIGIN = 'https://local-signup.example.test';
 const CLOCK = Date.now();
-const PASSWORD = 'a long fixture password 2026';
+const PASSWORD = 'fixture pass2026';
 const CONSENT = Object.freeze({ ageConfirmed: true, policyAccepted: true, policyVersion: 'preview-2026-10-21' });
 const DEFAULT = Object.freeze({ username: 'fixture_user', password: PASSWORD, nickname: '시험 토끼', ...CONSENT });
 const HASH = value => `scrypt-v1$65536$8$2$${'c'.repeat(32)}$${createHash('sha256').update(value).digest('hex')}`;
@@ -230,7 +230,7 @@ test('signup validates username, nickname and explicit current consent before ha
     { username: 'abc' }, { username: 'a'.repeat(25) }, { username: 'UPPER' }, { username: '한글아이디' }, { username: 'has space' }, { username: 'valid\n' },
     { nickname: 'a' }, { nickname: '<script>' }, { nickname: '가'.repeat(13) },
     { ageConfirmed: false }, { ageConfirmed: 'true' }, { policyAccepted: false }, { policyAccepted: 1 },
-    { policyVersion: 'old-policy' }, { policyVersion: null }, { password: 'short password' }, { password: 'a'.repeat(129) },
+    { policyVersion: 'old-policy' }, { policyVersion: null }, { password: 'a'.repeat(7) }, { password: 'a'.repeat(17) },
   ];
   for (const body of cases) await t.test(Object.keys(body)[0] + ':' + String(Object.values(body)[0]), async t => {
     const f = fixture(t), cookie = await f.prepare(), response = await f.register(cookie, { ...DEFAULT, ...body });
@@ -238,8 +238,8 @@ test('signup validates username, nickname and explicit current consent before ha
   });
 });
 
-test('password boundaries and literal spaces are preserved', async t => {
-  for (const password of [' '.repeat(15), 'a'.repeat(15), 'a'.repeat(128), '🙂'.repeat(64), '  password with spaces  ']) {
+test('signup accepts 8 to 16 UTF-16 characters and preserves literal spaces', async t => {
+  for (const password of [' '.repeat(8), 'a'.repeat(8), 'a'.repeat(16), '🙂'.repeat(8), '  password  ']) {
     await t.test(String(password.length), async t => {
       const f = fixture(t), signed = await f.signup({ ...DEFAULT, password });
       assert.equal(f.hashCalls[0].password, password);
@@ -249,6 +249,25 @@ test('password boundaries and literal spaces are preserved', async t => {
       assert.equal(f.hashCalls.at(-1).password, password);
     });
   }
+});
+
+test('login preserves access to earlier passwords up to 128 characters', async t => {
+  for (const password of ['a'.repeat(17), 'a'.repeat(128), '🙂'.repeat(64)]) {
+    await t.test(String(password.length), async t => {
+      const f = fixture(t), signed = await f.signup();
+      // Represent a credential issued under the previous 15–128 policy.
+      f.db.sqlite.prepare('UPDATE auth_local_credentials SET password_hash = ? WHERE username = ?').run(HASH(password), DEFAULT.username);
+      const out = await f.logout(signed.cookie), cookie = await f.prepare(cookies(out, signed.cookie));
+      const response = await f.login(cookie, { username: DEFAULT.username, password });
+      assert.equal(response.status, 200, await response.clone().text());
+      assert.equal(f.hashCalls.at(-1).password, password);
+    });
+  }
+  const f = fixture(t), cookie = await f.prepare();
+  for (const password of ['a'.repeat(7), 'a'.repeat(129)]) {
+    assert.equal((await f.login(cookie, { username: DEFAULT.username, password })).status, 400);
+  }
+  assert.equal(f.hashCalls.length, 0);
 });
 
 test('wrong password and absent username give the same generic failure and both verify a hash', async t => {

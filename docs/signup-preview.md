@@ -1,0 +1,51 @@
+# 아이디·Google 회원가입 시험 배포
+
+2026-10-21 사용자 결정: 아이디·비밀번호·닉네임으로 직접 가입하고 Google 로그인도 사용한다. 카카오·네이버는 준비 중으로 표시하며 해당 시험본에서는 서버 요청도 비활성이다. 앞선 운영자 한 명 전용 가입보다 이 구성을 우선한다.
+
+## 준비된 동작
+
+- 로그인/회원가입 화면, 아이디 4~24자(소문자 영문·숫자·밑줄), 비밀번호 15~128자(공백 포함), 닉네임 2~12자.
+- 직접 가입과 Google 신규 가입은 만 14세 이상 자기확인과 안내 확인을 받는다. 버전 `preview-2026-10-21` 및 확인 시각을 저장하며 실제 연령 검증으로 표시하지 않는다.
+- Google 신규 신원은 회원가입 화면의 Google 가입으로 시작한다. 기존 계정은 로그인 화면을 이용한다. 이메일 일치만으로 직접 가입 계정과 Google 계정을 합치지 않는다.
+- 새 게임 프로필·기본 토끼·기존 무료 시작 아이템·180코인을 기존 게임 규칙대로 제공한다. 저장한 문제 진행은 재로그인 후 복원한다.
+- 비밀번호 찾기·변경·이메일 복구는 이번 시험본에 없다. 화면에서 가입 전에 이를 안내한다.
+
+기존 시험 주소의 접근 비밀번호는 그대로 사용한다. `server/signup-preview-worker.mjs`만 명시적인 시험 가입 권한을 전달하며 기본 Worker·Sites·기존 연결용 시험본에서는 열리지 않는다. `registration.previewOpen`과 일반 공개 `registration.open:false`는 구별한다. 실제 광고 연결이나 연령 확인 완료를 뜻하지 않는다.
+
+## 비밀번호와 저장소
+
+비밀번호는 원문 저장·로그·URL·브라우저 저장소 없이 서버로 전달한다. 별도 SQLite Durable Object의 `node:crypto.scryptSync`가 무작위 16바이트 salt, `N=65536,r=8,p=2`, 32바이트 결과를 만든다. 이는 [OWASP의 scrypt 64MiB 대안](https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html#scrypt)이다. 비교는 고정 형식 검사와 timing-safe comparison을 사용한다.
+
+일반 Free Worker 요청에서 이 연산을 수행하지 않는다. [SQLite Durable Objects는 Free에서 사용 가능하며 기본 CPU 한도는 요청당 30초](https://developers.cloudflare.com/durable-objects/platform/limits/)다. 새 구성은 CPU 한도를 덮어쓰지 않고 플랫폼 기본값을 사용한다. 유료 전환·카드 등록 명령은 없다. 실제 원격의 처리 시간과 무료 일일 한도는 배포 후 확인 대상이다.
+
+DB에는 계정·비밀번호 해시·닉네임·가입 확인 기록이 저장된다. 요청 제한은 클라이언트 주소의 SHA-256 키와 아이디 해시, 전체 버킷을 사용한다. Cloudflare가 전달하는 `CF-Connecting-IP`를 신뢰하는 Worker 진입점 전용이며 임의 프록시 뒤에 그대로 배포하지 않는다. IP별 분당 30회, 아이디별 10회, 종류별 전체 60회 제한을 두며 해시 처리기는 분당 60회·하루 5,000회로 제한한다. 해시 처리기 저장소에는 카운터만 저장된다.
+
+`0006_preview_registration.sql`은 7번째 마이그레이션이다. 기존 세션과 OAuth 흐름을 복사·보존하고 직접 자격증명, 가입 확인, 일회성 요청, 요청 제한 표를 추가한다. 앱 표는 22개다. **기존 DB 초기화 파일을 다시 실행하지 않는다.**
+
+## 로컬 검증 및 파일 준비
+
+```sh
+npm test
+npm run check
+npm run build
+node scripts/preview-worker.mjs signup-dry-run
+```
+
+`wrangler.signup-preview.jsonc`는 로컬 검사용 DB placeholder와 `remote:false`를 유지한다. 준비 명령은 원격 배포를 실행하지 않는다. 실제 사용자가 실행할 패키지는 별도로 생성한다.
+
+```sh
+node scripts/prepare-signup-deployment.mjs "<절대 출력 폴더>" "<확인된 Cloudflare 계정 ID>" "<기존 D1 ID>"
+```
+
+패키지에는 번들, 기존 DB 대상 설정, 7개 마이그레이션, 파일 해시 목록, 현재 개발 PC용 `deploy.mjs`, `배포하기.cmd`가 들어간다. 실제 비밀번호·Google Secret은 포함하지 않는다.
+
+## 사용자의 적용 순서
+
+1. 준비한 폴더의 **배포하기.cmd**를 실행한다. 브라우저가 열리면 기존 Cloudflare 계정으로 로그인하고 허용한다.
+2. 프로그램이 기존 DB 마이그레이션 이력을 검사한다. 이력이 첫 6개 또는 전체 7개와 다르면 중단한다. 신규 적용 파일은 `0006_preview_registration.sql` 하나다. 기존 데이터 삭제·초기화 작업은 없다.
+3. 적용 후 7개 이력을 다시 확인한 뒤 기존 `harufive-preview` Worker와 비밀번호 처리기 namespace를 배포한다. 기존 대시보드 수정 내용을 덮어쓸지 묻는다면 준비한 현재 버전으로 기존 Worker를 갱신하는 절차다. 기존 Secret과 설정을 보존하며 Logs OFF를 유지한다.
+4. 일반 Chrome에서 기존 시험 사이트를 새로고침한다. 직접 가입 → 한 문제 풀이 → 로그아웃 → 아이디 재로그인 후 기록 복원을 확인한다. 별도로 회원가입 화면에서 본인 Google 계정의 가입·재로그인을 확인한다.
+
+`worker.mjs`만 대시보드에 붙여넣으면 최초 Durable Object namespace가 등록되지 않는다. [공식 마이그레이션 절차](https://developers.cloudflare.com/durable-objects/reference/durable-objects-migrations/)에 따라 클래스 등록과 binding을 함께 배포해야 한다. 구성이 추가돼 이전 단일 코드 붙여넣기 안내를 대체한다.
+
+Cloudflare 콘솔과 시험 주소에 대한 에이전트 도구 접근 차단은 계속 존중한다. 다른 브라우저·API·CLI로 우회하지 않았으며 이 배포 실행 파일도 에이전트가 실행하지 않는다. 실제 원격 배포와 본인 Google 로그인은 아직 미확인이다. 로컬 합성 계정·서명 검증 결과를 원격 성공으로 보고하지 않는다.

@@ -260,6 +260,23 @@ dialog:has(#sound-master) .modal-actions .btn{flex-basis:auto}
 .release-entry-card .login-availability{font-size:11px;line-height:1.8;text-align:left;width:100%}
 .login-divider{display:flex;align-items:center;gap:10px;width:100%;color:var(--muted);font-size:10px;margin:2px 0}
 .login-divider:before,.login-divider:after{content:'';flex:1;height:1px;background:var(--line)}
+.auth-entry-tabs{display:grid;grid-template-columns:1fr 1fr;gap:5px;width:100%;padding:5px;border-radius:13px;background:#f3eff7}
+.auth-entry-tabs>button{min-height:44px;padding:9px 12px;border:0;border-radius:9px;background:transparent;color:var(--muted);font:inherit;font-size:13px;cursor:pointer}
+.auth-entry-tabs>button[aria-pressed="true"]{background:#fff;color:var(--purple);font-weight:700;box-shadow:0 2px 7px #3526410b}
+.auth-entry-tabs>button:disabled{cursor:default;opacity:.6}
+.auth-entry-tabs>button:focus-visible,.local-auth-form input:focus-visible,.auth-confirmations input:focus-visible{outline:3px solid var(--purple);outline-offset:3px}
+.local-auth-form{display:flex;flex-direction:column;gap:9px;width:100%;min-width:0;text-align:left}
+.local-auth-form>label{font-size:13px;font-weight:700;line-height:1.7;margin-top:5px}
+.local-auth-form>.field-input{width:100%;min-width:0;min-height:46px;font-size:16px;box-sizing:border-box}
+.release-entry-card .local-auth-form>p{margin:-3px 0 4px;font-size:11px;line-height:1.75;text-align:left}
+.local-auth-form>.btn{min-height:48px;margin-top:9px}
+.auth-confirmations{display:flex;flex-direction:column;gap:8px;width:100%;padding:15px;border:1px solid var(--line);border-radius:12px;background:#fbf9fd;box-sizing:border-box;text-align:left}
+.auth-confirmations>label{display:flex;align-items:flex-start;gap:10px;min-height:35px;font-size:12px;line-height:1.9;cursor:pointer}
+.auth-confirmations input{width:18px;height:18px;flex:0 0 18px;margin-top:3px;accent-color:var(--purple)}
+.auth-confirmations>label>span{min-width:0;overflow-wrap:anywhere}
+.auth-policy-actions{display:flex;flex-wrap:wrap;gap:4px 16px}
+.auth-policy-actions>.text-link{font-size:11px;min-height:44px}
+.release-entry-card .auth-confirmations>p{font-size:10px;line-height:1.8;text-align:left}
 .auth-feedback{display:flex;align-items:flex-start;gap:12px;width:100%;padding:13px 15px;border:1px solid #d3e9df;background:#f0f8f4;border-radius:12px;text-align:left;box-sizing:border-box}
 .auth-feedback.error{border-color:#efd8bd;background:#fff4e9}
 .auth-feedback p,.release-entry-card .auth-feedback p{flex:1;min-width:0;font-size:12px;color:#4b6c5c;line-height:1.8;overflow-wrap:anywhere}

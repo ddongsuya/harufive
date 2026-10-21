@@ -1,7 +1,7 @@
 import './runtime.mjs';
 import { spawn } from 'node:child_process';
-import { createHash } from 'node:crypto';
-import { lstat, mkdir, mkdtemp, readFile, realpath, writeFile } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
+import { lstat, mkdir, mkdtemp, readFile, realpath, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
@@ -14,6 +14,10 @@ const WORK = path.join(PROJECT, '.local', 'private-preview');
 const CONFIG = path.join(PROJECT, 'wrangler.preview.jsonc');
 const CONNECTED_WORK = path.join(PROJECT, '.local', 'connected-preview');
 const CONNECTED_CONFIG = path.join(PROJECT, 'wrangler.connected-preview.jsonc');
+const OWNER_WORK = path.join(PROJECT, '.local', 'owner-preview');
+const OWNER_CONFIG = path.join(PROJECT, 'wrangler.owner-preview.jsonc');
+const SIGNUP_WORK = path.join(PROJECT, '.local', 'signup-preview');
+const SIGNUP_CONFIG = path.join(PROJECT, 'wrangler.signup-preview.jsonc');
 const WRANGLER = path.join(PROJECT, 'node_modules', 'wrangler', 'wrangler-dist', 'cli.js');
 export const PREVIEW_ORIGIN = 'https://harufive-preview.limjm900202.workers.dev';
 export const PREVIEW_GZIP_LIMIT = 3 * 1024 * 1024;
@@ -41,6 +45,16 @@ export const CONNECTED_PREVIEW_CONFIG = Object.freeze({
     migrations_dir: 'drizzle', remote: false,
   }],
 });
+export const OWNER_PREVIEW_CONFIG = Object.freeze({
+  ...CONNECTED_PREVIEW_CONFIG, main: '.local/owner-preview/worker.mjs',
+});
+const { limits: _ownerLimit, ...signupBase } = CONNECTED_PREVIEW_CONFIG;
+export const SIGNUP_PREVIEW_CONFIG = Object.freeze({
+  ...signupBase, main: '.local/signup-preview/worker.mjs',
+  compatibility_flags: ['nodejs_compat'],
+  durable_objects: { bindings: [{ name: 'PASSWORD_HASHER', class_name: 'PasswordHasher' }] },
+  migrations: [{ tag: 'harufive-password-v1', new_sqlite_classes: ['PasswordHasher'] }],
+});
 const ASSET_FILES = [
   ['/index.html', 'local/index.html', 'text/html; charset=utf-8'],
   ['/local-boot.js', 'local/boot.js', 'text/javascript; charset=utf-8'],
@@ -53,7 +67,8 @@ const ASSET_FILES = [
 const SERVER_INPUTS = new Set([
   'privacy-contract', 'admission-policy', 'auth-service', 'account-lifecycle',
   'guardian-service', 'privacy-http', 'game-service', 'http', 'standalone-http',
-  'standalone-assets', 'worker', 'preview-worker', 'connected-preview-worker',
+  'standalone-assets', 'worker', 'preview-worker', 'connected-preview-worker', 'owner-preview-worker',
+  'signup-preview-worker', 'password-client', 'password-hasher',
 ].map(name => `server/${name}.mjs`));
 const LEGACY_INPUTS = new Set(['question-variants', 'game-core', 'state'].map(name => `legacy/v040/${name}.js`));
 const fail = () => { throw new Error('시험용 Worker 준비를 완료하지 못했습니다. 설정과 허용된 소스 파일을 확인해 주세요.'); };
@@ -80,32 +95,46 @@ async function checkedPath(target, { directory = false, create = false } = {}) {
   return current;
 }
 
-export function validatePreviewConfig(config, { connected = false } = {}) {
+export function validatePreviewConfig(config, { connected = false, owner = false, signup = false } = {}) {
   // No account, DB, external assets, source maps, custom build hooks or remote
   // command parameters are accepted by this local-only preparation command.
-  if (!isDeepStrictEqual(config, connected ? CONNECTED_PREVIEW_CONFIG : PREVIEW_CONFIG)) fail();
+  if ((owner || signup) && !connected || owner && signup) fail();
+  if (!isDeepStrictEqual(config, signup ? SIGNUP_PREVIEW_CONFIG : owner ? OWNER_PREVIEW_CONFIG : connected ? CONNECTED_PREVIEW_CONFIG : PREVIEW_CONFIG)) fail();
   return config;
 }
 
-export function renderPreviewEntry(assets, { connected = false } = {}) {
+function checkedOwnerEnrollment(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value) ||
+      Object.keys(value).sort().join(',') !== 'email,notBefore' ||
+      typeof value.email !== 'string' || !/^[a-z0-9][a-z0-9.]{0,63}@gmail\.com$/.test(value.email) ||
+      !Number.isSafeInteger(value.notBefore) || value.notBefore <= 0) fail();
+  return { email: value.email, notBefore: value.notBefore };
+}
+
+export function renderPreviewEntry(assets, { connected = false, ownerEnrollment = null, signup = false } = {}) {
+  const owner = ownerEnrollment !== null ? checkedOwnerEnrollment(ownerEnrollment) : null;
+  if ((owner || signup) && !connected || owner && signup) fail();
   if (!Array.isArray(assets) || assets.length !== ASSET_FILES.length) fail();
   const entries = assets.map((asset, index) => {
     const [route, , contentType] = ASSET_FILES[index];
     if (asset.path !== route || asset.contentType !== contentType || typeof asset.content !== 'string') fail();
     return [route, { contentType, content: asset.content }];
   });
-  const importName = connected ? 'connected-preview-worker' : 'preview-worker';
+  const importName = signup ? 'signup-preview-worker' : connected ? 'connected-preview-worker' : 'preview-worker';
+  const importSource = owner
+    ? `import { createOwnerPreviewWorker } from '../../server/owner-preview-worker.mjs';\nconst previewWorker = createOwnerPreviewWorker(${JSON.stringify(owner)});`
+    : `import previewWorker from '../../server/${importName}.mjs';${signup ? "\nexport { PasswordHasher } from '../../server/signup-preview-worker.mjs';" : ''}`;
   const connection = connected ? `
       // Defer these reads until after the preview gate authenticates the request.
       get DB() { return env.DB; },
       get HARU_GOOGLE_CLIENT_ID() { return env.HARU_GOOGLE_CLIENT_ID; },
       get HARU_GOOGLE_CLIENT_SECRET() { return env.HARU_GOOGLE_CLIENT_SECRET; },
-      get HARU_KAKAO_CLIENT_ID() { return env.HARU_KAKAO_CLIENT_ID; },
+      ${signup ? 'get PASSWORD_HASHER() { return env.PASSWORD_HASHER; },' : `get HARU_KAKAO_CLIENT_ID() { return env.HARU_KAKAO_CLIENT_ID; },
       get HARU_KAKAO_CLIENT_SECRET() { return env.HARU_KAKAO_CLIENT_SECRET; },
       get HARU_KAKAO_OIDC_ENABLED() { return env.HARU_KAKAO_OIDC_ENABLED; },
       get HARU_NAVER_CLIENT_ID() { return env.HARU_NAVER_CLIENT_ID; },
-      get HARU_NAVER_CLIENT_SECRET() { return env.HARU_NAVER_CLIENT_SECRET; },` : '';
-  return `import previewWorker from '../../server/${importName}.mjs';
+      get HARU_NAVER_CLIENT_SECRET() { return env.HARU_NAVER_CLIENT_SECRET; },`}` : '';
+  return `${importSource}
 const assets = new Map(${JSON.stringify(entries)});
 const assetAdapter = Object.freeze({
   async fetch(request) {
@@ -135,11 +164,13 @@ export function measurePreviewBundle(bytes) {
   return { bytes: bytes.byteLength, gzipBytes, sha256: createHash('sha256').update(bytes).digest('hex') };
 }
 
-export async function buildPreviewWorker({ connected = false } = {}) {
+export async function buildPreviewWorker({ connected = false, ownerEnrollment = null, signup = false } = {}) {
   if (typeof connected !== 'boolean') fail();
-  const work = connected ? CONNECTED_WORK : WORK;
-  const config = connected ? CONNECTED_CONFIG : CONFIG;
-  validatePreviewConfig(JSON.parse(await readFile(await checkedPath(config), 'utf8')), { connected });
+  const owner = ownerEnrollment !== null ? checkedOwnerEnrollment(ownerEnrollment) : null;
+  if (typeof signup !== 'boolean' || (owner || signup) && !connected || owner && signup) fail();
+  const work = signup ? SIGNUP_WORK : owner ? OWNER_WORK : connected ? CONNECTED_WORK : WORK;
+  const config = signup ? SIGNUP_CONFIG : owner ? OWNER_CONFIG : connected ? CONNECTED_CONFIG : CONFIG;
+  validatePreviewConfig(JSON.parse(await readFile(await checkedPath(config), 'utf8')), { connected, owner: !!owner, signup });
   const assets = [];
   for (const [route, source, contentType] of ASSET_FILES) {
     const data = await readFile(await checkedPath(path.join(PROJECT, source)));
@@ -152,16 +183,23 @@ export async function buildPreviewWorker({ connected = false } = {}) {
   await checkedPath(work, { directory: true, create: true });
   const entry = await checkedPath(path.join(work, 'entry.mjs'), { create: true });
   const output = await checkedPath(path.join(work, 'worker.mjs'), { create: true });
-  await writeFile(entry, renderPreviewEntry(assets, { connected }));
+  const entrySource = renderPreviewEntry(assets, { connected, ownerEnrollment: owner, signup });
+  // Compile the in-memory entry so parallel tests/builds cannot read another
+  // build's partly written entry. Retain an atomically published inspection copy.
+  const entryTemporary = await checkedPath(path.join(work, `entry-${randomUUID()}.tmp`), { create: true });
+  await writeFile(entryTemporary, entrySource);
+  await rename(entryTemporary, entry);
   const result = await build({
-    absWorkingDir: PROJECT, entryPoints: [entry], outfile: output,
+    absWorkingDir: PROJECT, stdin: { contents: entrySource, resolveDir: work, sourcefile: entry }, outfile: output,
     bundle: true, write: false, platform: 'browser', format: 'esm', target: 'es2022',
     sourcemap: false, sourcesContent: false, legalComments: 'none', minify: false,
     metafile: true, logLevel: 'silent',
+    external: signup ? ['node:crypto', 'node:buffer'] : [],
   });
   const outputs = Object.values(result.metafile.outputs);
   if (result.outputFiles.length !== 1 || outputs.length !== 1 ||
-      outputs[0].imports.length !== 0 || !isDeepStrictEqual(outputs[0].exports, ['default'])) fail();
+      (signup ? outputs[0].imports.some(item => !item.external || !['node:crypto', 'node:buffer'].includes(item.path)) : outputs[0].imports.length !== 0) ||
+      !isDeepStrictEqual(outputs[0].exports, signup ? ['PasswordHasher', 'default'] : ['default'])) fail();
   // Include only the server's known modules and the installed jose JS modules
   // they import; never glob runtime files or copy a dependency directory.
   if (Object.keys(result.metafile.inputs).some(input =>
@@ -169,7 +207,9 @@ export async function buildPreviewWorker({ connected = false } = {}) {
     !/^node_modules\/jose\/dist\/webapi\/[a-z0-9_/-]+\.js$/.test(input))) fail();
   const bytes = result.outputFiles[0].contents;
   const measured = measurePreviewBundle(bytes);
-  await writeFile(output, bytes);
+  const outputTemporary = await checkedPath(path.join(work, `worker-${randomUUID()}.tmp`), { create: true });
+  await writeFile(outputTemporary, bytes);
+  await rename(outputTemporary, output);
   return { ...measured, assetCount: assets.length, output, inputs: Object.keys(result.metafile.inputs) };
 }
 
@@ -207,15 +247,16 @@ require('node:module').syncBuiltinESMExports();
 `;
 }
 
-export function previewDryRunCommand(runtimeDirectory, { connected = false } = {}) {
+export function previewDryRunCommand(runtimeDirectory, { connected = false, owner = false, signup = false } = {}) {
+  if ((owner || signup) && !connected || owner && signup) fail();
   return ['--require', path.join(runtimeDirectory, 'offline.cjs'), WRANGLER, 'deploy',
-    '--dry-run', '--outdir', path.join(runtimeDirectory, 'bundle'), '--config', connected ? CONNECTED_CONFIG : CONFIG,
+    '--dry-run', '--outdir', path.join(runtimeDirectory, 'bundle'), '--config', signup ? SIGNUP_CONFIG : owner ? OWNER_CONFIG : connected ? CONNECTED_CONFIG : CONFIG,
     '--env-file', path.join(runtimeDirectory, 'empty.env')];
 }
 
-async function dryRunPreview({ connected = false } = {}) {
+async function dryRunPreview({ connected = false, owner = false, signup = false } = {}) {
   await checkedPath(WRANGLER);
-  const work = connected ? CONNECTED_WORK : WORK;
+  const work = signup ? SIGNUP_WORK : owner ? OWNER_WORK : connected ? CONNECTED_WORK : WORK;
   const runtimeDirectory = await mkdtemp(path.join(await checkedPath(work, { directory: true }), 'offline-'));
   await checkedPath(runtimeDirectory, { directory: true });
   await mkdir(path.join(runtimeDirectory, 'bundle'));
@@ -224,7 +265,7 @@ async function dryRunPreview({ connected = false } = {}) {
   return await new Promise((resolve, reject) => {
     // Output is intentionally suppressed: Wrangler logs must not become a
     // channel for machine details or a future library's environment diagnostics.
-    const child = spawn(process.execPath, previewDryRunCommand(runtimeDirectory, { connected }), {
+    const child = spawn(process.execPath, previewDryRunCommand(runtimeDirectory, { connected, owner, signup }), {
       cwd: runtimeDirectory, env: previewChildEnvironment(process.env, runtimeDirectory),
       stdio: 'ignore', windowsHide: true,
     });
@@ -234,17 +275,37 @@ async function dryRunPreview({ connected = false } = {}) {
   });
 }
 
+// An explicit local command pins the human-selected operator in server code.
+// It neither reads credentials nor uploads/deploys anything.
+export async function runOwnerPreviewWorker(args, write = message => console.log(message)) {
+  if (!Array.isArray(args) || args.length !== 2 || !['build', 'dry-run'].includes(args[0])) {
+    write('사용법: node scripts/owner-preview.mjs build 또는 dry-run 뒤에 승인한 Gmail 주소 하나를 입력하세요. 원격 작업은 지원하지 않습니다.');
+    return 2;
+  }
+  try {
+    const ownerEnrollment = checkedOwnerEnrollment({ email: args[1], notBefore: Date.now() });
+    const result = await buildPreviewWorker({ connected: true, ownerEnrollment });
+    if (args[0] === 'dry-run') await dryRunPreview({ connected: true, owner: true });
+    write(`운영자 한 명의 시험 가입 Worker 준비 완료: 자산 ${result.assetCount}개, gzip ${result.gzipBytes}바이트. ${args[0] === 'dry-run' ? '오프라인 dry-run 통과. ' : ''}원격 배포·실제 가입은 실행하지 않았습니다.`);
+    return 0;
+  } catch {
+    write('운영자 시험 Worker 준비를 완료하지 못했습니다. 승인한 Gmail 주소와 로컬 설정을 확인하세요. 입력값은 출력하지 않습니다.');
+    return 1;
+  }
+}
+
 export async function runPreviewWorker(args = process.argv.slice(2), write = message => console.log(message)) {
-  if (args.length !== 1 || !['build', 'dry-run', 'connected-build', 'connected-dry-run'].includes(args[0])) {
+  if (args.length !== 1 || !['build', 'dry-run', 'connected-build', 'connected-dry-run', 'signup-build', 'signup-dry-run'].includes(args[0])) {
     write('사용법: node scripts/preview-worker.mjs build, dry-run, connected-build 또는 connected-dry-run. 추가 인수와 원격 작업은 지원하지 않습니다.');
     return 2;
   }
   try {
-    const connected = args[0].startsWith('connected-');
+    const signup = args[0].startsWith('signup-');
+    const connected = signup || args[0].startsWith('connected-');
     const dryRun = args[0].endsWith('dry-run');
-    const result = await buildPreviewWorker({ connected });
-    if (dryRun) await dryRunPreview({ connected });
-    write(`${connected ? '기존 계정 연결용' : '정적'} 비공개 시험 Worker 준비 완료: 자산 ${result.assetCount}개, gzip ${result.gzipBytes}바이트. ${dryRun ? '오프라인 dry-run 통과. ' : ''}원격 배포·실제 로그인은 실행하지 않았습니다.`);
+    const result = await buildPreviewWorker({ connected, signup });
+    if (dryRun) await dryRunPreview({ connected, signup });
+    write(`${signup ? '아이디·Google 가입용' : connected ? '기존 계정 연결용' : '정적'} 비공개 시험 Worker 준비 완료: 자산 ${result.assetCount}개, gzip ${result.gzipBytes}바이트. ${dryRun ? '오프라인 dry-run 통과. ' : ''}원격 배포·실제 로그인은 실행하지 않았습니다.`);
     return 0;
   } catch {
     write('시험용 Worker 준비를 완료하지 못했습니다. 로컬 설정과 설치 상태를 확인해 주세요. 원격 배포는 실행하지 않았습니다.');

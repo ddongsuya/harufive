@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { preparePreviewSchema } from '../scripts/preview-db-schema.mjs';
 
-test('preview bootstrap preserves the migrated schema, remains empty, and records six migrations', () => {
+test('preview bootstrap preserves the migrated schema, remains empty, and records seven migrations', () => {
   const files = preparePreviewSchema();
   const db = new DatabaseSync(':memory:');
   try {
@@ -18,13 +18,13 @@ test('preview bootstrap preserves the migrated schema, remains empty, and record
         assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM "${object.name}"`).get().n, 0);
       }
     }
-    assert.equal(files.objects.filter(object => object.type === 'table').length, 18);
+    assert.equal(files.objects.filter(object => object.type === 'table').length, 22);
     assert.deepEqual(db.prepare('SELECT name FROM d1_migrations ORDER BY name').all().map(row => row.name),
       files.sourceHashes.map(row => row.name));
     assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(), []);
     db.exec(files.verifySql);
     assert.throws(() => db.exec(files.recordSql), /UNIQUE/);
-    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM d1_migrations').get().n, 6);
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM d1_migrations').get().n, 7);
     assert.doesNotMatch(files.initialSql, /^\s*(?:DROP|ALTER|DELETE|UPDATE|INSERT|BEGIN|COMMIT)\b/im);
   } finally { db.close(); }
 });

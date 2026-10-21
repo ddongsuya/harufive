@@ -1,4 +1,5 @@
 import { GameApiError, applicationResponseStatus } from './api.js';
+import { POLICY_NOTICE_VERSION } from './policy-views.js';
 
 export const SOCIAL_PROVIDERS = Object.freeze([
   Object.freeze({id:'kakao',name:'카카오'}),
@@ -12,17 +13,18 @@ const AUTH_PATHS = Object.freeze({
   naver:'https://nid.naver.com/oauth2/authorize',
 });
 export const SITES_SIGN_IN = '/signin-with-chatgpt?return_to=%2F';
+export const PREVIEW_POLICY_VERSION = POLICY_NOTICE_VERSION;
 
-export function providerName(id){return SOCIAL_PROVIDERS.find(provider=>provider.id===id)?.name||(id==='chatgpt'?'ChatGPT':'로그인 계정');}
+export function providerName(id){return SOCIAL_PROVIDERS.find(provider=>provider.id===id)?.name||(id==='chatgpt'?'ChatGPT':id==='local'?'아이디 로그인':'로그인 계정');}
 
 /** Keep display metadata separate from game records; never accept an account ID from this API. */
 export function normalizeAuthStatus(payload){
   if(!payload||typeof payload.authenticated!=='boolean'||!Array.isArray(payload.providers))
     throw new GameApiError('로그인 연결 상태를 확인하지 못했어요.',{code:'INVALID_AUTH_STATUS'});
   const account=payload.authenticated&&payload.account&&typeof payload.account==='object'?{
-    provider:PROVIDER_IDS.has(payload.account.provider)||payload.account.provider==='chatgpt'?payload.account.provider:null,
+    provider:PROVIDER_IDS.has(payload.account.provider)||['chatgpt','local'].includes(payload.account.provider)?payload.account.provider:null,
     linkedProviders:[...new Set((Array.isArray(payload.account.linkedProviders)?payload.account.linkedProviders:[])
-      .filter(id=>PROVIDER_IDS.has(id)||id==='chatgpt'))],
+      .filter(id=>PROVIDER_IDS.has(id)||['chatgpt','local'].includes(id)))],
   }:null;
   const suppliedReauth=payload.reauthentication;
   const context=payload.authenticated&&typeof suppliedReauth?.accountContext==='string'&&/^[a-f0-9]{64}$/.test(suppliedReauth.accountContext)?suppliedReauth.accountContext:null;
@@ -31,15 +33,24 @@ export function normalizeAuthStatus(payload){
     enabled:provider.id!=='google'&&!!context&&!!playerId&&suppliedReauth?.enabled===true&&account?.linkedProviders.includes(provider.id)===true&&
       Array.isArray(suppliedReauth.providers)&&suppliedReauth.providers.some(item=>item?.id===provider.id&&item.enabled===true),
   }));
+  const providers=SOCIAL_PROVIDERS.map(provider=>{
+    const supplied=payload.providers.find(candidate=>candidate?.id===provider.id);
+    return {...provider,enabled:supplied?.enabled===true,reason:supplied?.enabled===true?'ready':'not_configured'};
+  });
+  const suppliedEnrollment=payload.previewEnrollment;
   return {
     authenticated:payload.authenticated,account,
     reauthentication:{enabled:reauthProviders.some(provider=>provider.enabled),accountContext:context,playerId,providers:reauthProviders},
     sites:{enabled:payload.sites?.enabled===true},
-    providers:SOCIAL_PROVIDERS.map(provider=>{
-      const supplied=payload.providers.find(candidate=>candidate?.id===provider.id);
-      return {...provider,enabled:supplied?.enabled===true,reason:supplied?.enabled===true?'ready':'not_configured'};
-    }),
-    registration:{open:payload.registration?.open===true},
+    providers,
+    previewEnrollment:{
+      enabled:payload.authenticated===false&&suppliedEnrollment?.enabled===true&&suppliedEnrollment.provider==='google'&&
+        suppliedEnrollment.accountLimit===1&&providers.some(provider=>provider.id==='google'&&provider.enabled),
+      provider:'google',accountLimit:1,
+    },
+    localAuth:{enabled:payload.localAuth?.enabled===true,
+      registrationOpen:payload.authenticated===false&&payload.localAuth?.enabled===true&&payload.localAuth.registrationOpen===true&&payload.registration?.previewOpen===true},
+    registration:{open:payload.registration?.open===true,previewOpen:payload.authenticated===false&&payload.registration?.previewOpen===true},
   };
 }
 
@@ -77,6 +88,7 @@ export function callbackNotice(search=''){
     ACCESS_DENIED:'로그인을 취소했거나 동의가 완료되지 않았어요. 원할 때 다시 시작해 주세요.',
     PROVIDER_DENIED:'로그인을 취소했거나 동의가 완료되지 않았어요. 원할 때 다시 시작해 주세요.',
     SIGNUP_CLOSED:'새 계정 가입은 아직 준비 중이에요. 이미 연결한 로그인 수단으로 이용해 주세요.',
+    SIGNUP_REQUIRED:'아직 가입한 계정이 없어요. 회원가입에서 Google로 가입하거나 아이디를 만들어 주세요.',
     REGISTRATION_CLOSED:'새 계정 가입은 아직 준비 중이에요. 이미 연결한 로그인 수단으로 이용해 주세요.',
     IDENTITY_ALREADY_LINKED:'이 로그인은 다른 게임 계정에 연결되어 있어요. 기록을 자동으로 합치지 않았어요.',
     ACCOUNT_ALREADY_LINKED:'이 로그인은 다른 게임 계정에 연결되어 있어요. 기록을 자동으로 합치지 않았어요.',
@@ -134,16 +146,30 @@ export function createAuthApi({fetcher=(...args)=>fetch(...args),timeoutMs=12000
       if(sequence!==statusSequence||destroyed)throw invalidated();
       currentReauth=status.reauthentication;return status;
     },
-    start:async(provider,intent,context)=>{
+    start:async(provider,intent,context,signup)=>{
       if(!PROVIDER_IDS.has(provider)||!['login','link','reauth'].includes(intent))throw new GameApiError('로그인 방식을 다시 선택해 주세요.',{code:'INVALID_AUTH_ACTION',retryable:false});
+      if(signup!==undefined&&(provider!=='google'||intent!=='login'||signup?.ageConfirmed!==true||signup?.policyAccepted!==true||signup?.policyVersion!==PREVIEW_POLICY_VERSION))
+        throw new GameApiError('회원가입 확인 항목을 다시 확인해 주세요.',{code:'INVALID_SIGNUP_CONFIRMATION',retryable:false});
       const reauth=currentReauth;
       if(intent==='reauth'&&(!reauth?.enabled||context!==reauth.accountContext||!/^[a-f0-9]{64}$/.test(context||'')||!reauth.providers.some(item=>item.id===provider&&item.enabled)))
         throw new GameApiError('현재 계정의 본인 확인 연결을 먼저 확인해 주세요.',{code:'REAUTH_NOT_READY',retryable:false});
-      const response=await request(provider+'/start',{intent},intent==='reauth'?context:undefined);
+      const response=await request(provider+'/start',{intent,...(signup===undefined?{}:{signup:{ageConfirmed:true,policyAccepted:true,policyVersion:PREVIEW_POLICY_VERSION}})},intent==='reauth'?context:undefined);
       if(intent==='reauth'&&(reauth!==currentReauth||context!==currentReauth?.accountContext))throw invalidated();
       return validateLoginDestination(response.url,provider,intent);
     },
     sitesStart:async()=>validateLoginDestination((await request('sites-start',{})).url,'chatgpt'),
+    localLogin:async({username,password})=>{
+      const response=await request('local/login',{username,password});
+      if(response?.authenticated!==true)throw new GameApiError('로그인 결과를 확인하지 못했어요. 다시 확인해 주세요.',{code:'INVALID_AUTH_RESPONSE'});
+      return {authenticated:true};
+    },
+    localRegister:async({username,password,nickname,ageConfirmed,policyAccepted,policyVersion})=>{
+      if(ageConfirmed!==true||policyAccepted!==true||policyVersion!==PREVIEW_POLICY_VERSION)
+        throw new GameApiError('회원가입 확인 항목을 다시 확인해 주세요.',{code:'INVALID_SIGNUP_CONFIRMATION',retryable:false});
+      const response=await request('local/register',{username,password,nickname,ageConfirmed:true,policyAccepted:true,policyVersion:PREVIEW_POLICY_VERSION});
+      if(response?.authenticated!==true)throw new GameApiError('회원가입 결과를 확인하지 못했어요. 로그인 화면에서 다시 확인해 주세요.',{code:'INVALID_AUTH_RESPONSE'});
+      return {authenticated:true};
+    },
     logout:()=>{cancelPending();return request('logout',{});},
     cancelPending,
     destroy:()=>{destroyed=true;cancelPending();},

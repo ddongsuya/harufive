@@ -21,7 +21,7 @@ test('persistent local database applies migrations once and keeps existing recor
   db.close(); db = createSQLiteD1({ filename });
   try {
     assert.equal(db.rows('SELECT * FROM auth_accounts').length, 1);
-    assert.equal(db.rows('SELECT * FROM local_schema_migrations').length, 6);
+    assert.equal(db.rows('SELECT * FROM local_schema_migrations').length, 7);
     assert.deepEqual(db.rows("SELECT name FROM sqlite_schema WHERE type = 'table' AND name IN ('guardian_requests','guardian_consents','guardian_links','privacy_account_controls','privacy_deletion_jobs') ORDER BY name").map(row => row.name),
       ['guardian_consents', 'guardian_links', 'guardian_requests', 'privacy_account_controls', 'privacy_deletion_jobs']);
   } finally { db.close(); }

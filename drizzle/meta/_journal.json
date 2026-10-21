@@ -43,6 +43,13 @@
       "when": 1792484107158,
       "tag": "0005_recent_reauthentication",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1792547279668,
+      "tag": "0006_preview_registration",
+      "breakpoints": true
     }
   ]
 }

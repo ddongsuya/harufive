@@ -9,10 +9,73 @@ import { pathToFileURL } from 'node:url';
 import {
   buildPreviewWorker, CONNECTED_PREVIEW_CONFIG, measurePreviewBundle, offlinePreloadSource, PREVIEW_CONFIG,
   PREVIEW_GZIP_LIMIT, PREVIEW_ORIGIN, previewChildEnvironment, previewDryRunCommand,
-  runPreviewWorker, validatePreviewConfig,
+  runPreviewWorker, runOwnerPreviewWorker, OWNER_PREVIEW_CONFIG, validatePreviewConfig,
 } from '../scripts/preview-worker.mjs';
 import { STANDALONE_GAME_ASSETS } from '../server/standalone-assets.mjs';
 import { createSQLiteD1 } from './helpers/d1-test-db.mjs';
+
+test('owner build is explicit, rejects invalid permission and preserves all default build modes', async () => {
+  assert.equal(validatePreviewConfig(structuredClone(OWNER_PREVIEW_CONFIG), { connected: true, owner: true }).name, 'harufive-preview');
+  assert.throws(() => validatePreviewConfig(OWNER_PREVIEW_CONFIG, { connected: true }));
+  assert.throws(() => validatePreviewConfig(OWNER_PREVIEW_CONFIG, { owner: true }));
+  for (const args of [[], ['deploy', 'fixture@gmail.com'], ['build'], ['build', 'fixture@gmail.com', '--remote']]) {
+    const messages = [];
+    assert.equal(await runOwnerPreviewWorker(args, value => messages.push(value)), 2);
+    assert.equal(messages.length, 1);
+  }
+  for (const ownerEnrollment of [
+    {}, { email: 'fixture@example.org', notBefore: 1 }, { email: 'fixture@gmail.com\n', notBefore: 1 },
+    { email: 'fixture@gmail.com', notBefore: 0 }, { email: 'fixture@gmail.com', notBefore: NaN },
+    { email: 'fixture@gmail.com', notBefore: 1, extra: true },
+  ]) await assert.rejects(buildPreviewWorker({ connected: true, ownerEnrollment }));
+  await assert.rejects(buildPreviewWorker({ ownerEnrollment: { email: 'fixture@gmail.com', notBefore: 1 } }));
+  assert.match(previewDryRunCommand('/isolated', { connected: true, owner: true }).join(' '), /wrangler\.owner-preview\.jsonc/);
+});
+
+test('owner bundle pins one server-side permission behind the preview gate without exposing the email', async t => {
+  const ownerEnrollment = { email: 'owner.fixture@gmail.com', notBefore: Date.now() - 60000 };
+  const result = await buildPreviewWorker({ connected: true, ownerEnrollment });
+  assert.ok(result.inputs.includes('server/owner-preview-worker.mjs'));
+  assert.match(result.output, /owner-preview/);
+  const module = await import(`${pathToFileURL(result.output).href}?owner-test=${result.sha256}`);
+  const previous = Object.getOwnPropertyDescriptor(crypto.subtle, 'timingSafeEqual');
+  Object.defineProperty(crypto.subtle, 'timingSafeEqual', {
+    configurable: true, value: (a, b) => timingSafeEqual(Buffer.from(a), Buffer.from(b)),
+  });
+  t.after(() => {
+    if (previous) Object.defineProperty(crypto.subtle, 'timingSafeEqual', previous);
+    else delete crypto.subtle.timingSafeEqual;
+  });
+  const db = createSQLiteD1(); t.after(() => db.close());
+  const password = Buffer.alloc(32, 0x51).toString('base64url');
+  const authorization = `Basic ${Buffer.from(`harufive:${password}`).toString('base64')}`;
+  let reads = 0;
+  const env = { HARU_PREVIEW_PASSWORD: password, HARU_GOOGLE_CLIENT_ID: 'owner-build-client',
+    HARU_GOOGLE_CLIENT_SECRET: 'owner-build-secret',
+    get DB() { reads++; return db; },
+    get HARU_PREVIEW_OWNER_EMAIL() { assert.fail('Environment cannot replace pinned enrollment'); },
+    get HARU_REGISTRATION_OPEN() { assert.fail('Public registration cannot be enabled'); },
+    get previewOwnerEnrollment() { assert.fail('No permission from environment'); },
+  };
+  for (const route of ['/', '/api/auth/status', '/api/auth/google/callback?state=x&code=y']) {
+    const response = await module.default.fetch(new Request(PREVIEW_ORIGIN + route), env);
+    assert.equal(response.status, 401);
+  }
+  assert.equal(reads, 0);
+  const status = await (await module.default.fetch(new Request(PREVIEW_ORIGIN + '/api/auth/status', { headers: { authorization } }), env)).json();
+  assert.deepEqual(status.previewEnrollment, { enabled: true, provider: 'google', accountLimit: 1 });
+  assert.equal(status.registration.open, false);
+  assert.equal(status.registration.ageVerificationReady, false);
+  assert.doesNotMatch(JSON.stringify(status), /owner\.fixture|owner-build-secret/);
+  for (const route of ['/', '/game/app.js', '/game/auth.js']) {
+    const response = await module.default.fetch(new Request(PREVIEW_ORIGIN + route, { headers: { authorization } }), env);
+    assert.equal(response.status, 200);
+    assert.doesNotMatch(await response.text(), /owner\.fixture@gmail\.com/);
+  }
+  db.sqlite.prepare('INSERT INTO auth_accounts (id,created_at) VALUES (?,?)').run('existing-account', Date.now());
+  const occupied = await (await module.default.fetch(new Request(PREVIEW_ORIGIN + '/api/auth/status', { headers: { authorization } }), env)).json();
+  assert.equal(occupied.previewEnrollment.enabled, false);
+});
 
 test('preview preparation rejects remote arguments without echoing them or building', async () => {
   for (const args of [[], ['deploy'], ['dry-run', '--remote'], ['build', 'private-token-marker']]) {

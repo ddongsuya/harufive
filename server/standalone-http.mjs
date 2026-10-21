@@ -10,15 +10,16 @@ function failure(status, code, message, headers = {}) {
 }
 
 /** Public-host adapter. No Sites identity, header fallback, or platform routes.
- * Only server-verified opaque sessions select an existing account. Registration
+ * Only server-verified opaque sessions select an account. Public registration
  * stays closed under the 14+ policy until age/admission verification is ready.
  * Legacy account sessions and data rights do not prove an account's age.
  * @param {Request} request
  * existingAccountLogin is a trusted adapter option, never a request/env flag.
- * It enables only the existing provider tuples enforced by auth-service.
- * @param {{db?: any, env?: any, now?: () => number, fetch?: typeof globalThis.fetch, existingAccountLogin?: boolean}} options
+ * A separately pinned previewOwnerEnrollment can admit one private operator;
+ * it is not an environment flag or evidence of age/public signup readiness.
+ * @param {{db?: any, env?: any, now?: () => number, fetch?: typeof globalThis.fetch, existingAccountLogin?: boolean, previewOwnerEnrollment?: {email: string, notBefore: number}|null, previewRegistration?: boolean, passwordService?: any, clientAddressHash?: string|null}} options
  */
-export async function handleStandaloneRequest(request, { db, env = {}, now = Date.now, fetch = globalThis.fetch, existingAccountLogin = false } = {}) {
+export async function handleStandaloneRequest(request, { db, env = {}, now = Date.now, fetch = globalThis.fetch, existingAccountLogin = false, previewOwnerEnrollment = null, previewRegistration = false, passwordService = null, clientAddressHash = null } = {}) {
   const url = new URL(request.url);
   const settings = { ...env, HARU_REGISTRATION_OPEN: 'false' };
   if (settings.HARU_AUTH_ORIGIN) {
@@ -36,12 +37,16 @@ export async function handleStandaloneRequest(request, { db, env = {}, now = Dat
     return request.method === 'GET' ? handleHealthRequest(db)
       : failure(405, 'METHOD_NOT_ALLOWED', '허용되지 않은 요청 방식이에요.', { Allow: 'GET' });
   }
-  const auth = /^\/api\/auth\/(status|logout|(?:kakao|google|naver)\/(?:start|callback))$/.exec(url.pathname);
+  const auth = /^\/api\/auth\/(status|logout|local\/(?:register|login)|(?:kakao|google|naver)\/(?:start|callback))$/.exec(url.pathname);
   if (auth) {
     const [first, second] = auth[1].split('/');
     return handleAuthRequest(request, {
-      action: second || first, provider: second ? first : undefined,
+      action: first === 'local' ? `local-${second}` : second || first, provider: second ? first : undefined,
       db, env: settings, now, fetch, sitesEnabled: false, loginEnabled: existingAccountLogin === true, reauthEnabled: false,
+      previewOwnerEnrollment: existingAccountLogin === true ? previewOwnerEnrollment : null,
+      previewRegistration: existingAccountLogin === true && previewRegistration === true,
+      passwordService: existingAccountLogin === true && previewRegistration === true ? passwordService : null,
+      clientAddressHash: existingAccountLogin === true && previewRegistration === true ? clientAddressHash : null,
     });
   }
   const privacy = /^\/api\/(privacy|guardian)\/([a-z]+)$/.exec(url.pathname);

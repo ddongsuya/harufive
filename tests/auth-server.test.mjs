@@ -159,7 +159,8 @@ test('auth status exposes only configuration state and no app identity without a
   assert.equal(body.authenticated, false);
   assert.equal(body.account, null);
   assert.deepEqual(body.providers.map(item => [item.id, item.enabled, item.reason]), [['kakao', false, 'not_configured'], ['google', false, 'not_configured'], ['naver', false, 'not_configured']]);
-  assert.deepEqual(body.registration, { open: false, ageTarget: '전체이용가 목표', minimumSignupAge: 14, guardianReady: false, under14EnrollmentOpen: false, ageVerificationReady: false });
+  assert.deepEqual(body.registration, { open: false, previewOpen: false, ageTarget: '전체이용가 목표', minimumSignupAge: 14, guardianReady: false, under14EnrollmentOpen: false, ageVerificationReady: false });
+  assert.deepEqual(body.localAuth, { enabled: false, registrationOpen: false });
   assert.equal(response.headers.get('Cache-Control'), 'private, no-store');
   assert.equal(response.headers.get('Referrer-Policy'), 'no-referrer');
   assert.ok(!JSON.stringify(body).includes('trusted-owner'));

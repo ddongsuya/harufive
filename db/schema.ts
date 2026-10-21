@@ -144,7 +144,7 @@ export const authSessions = sqliteTable('auth_sessions', {
   index('auth_sessions_account_index').on(table.accountId, table.createdAt),
   index('auth_sessions_expiry_index').on(table.expiresAt),
   index('auth_sessions_binding_index').on(table.bindingHash),
-  check('auth_sessions_provider_valid', sql`${table.provider} IN ('kakao', 'google', 'naver')`),
+  check('auth_sessions_provider_valid', sql`${table.provider} IN ('kakao', 'google', 'naver', 'local')`),
   check('auth_sessions_expiry_valid', sql`${table.expiresAt} > ${table.createdAt}`),
   check('auth_sessions_authenticated_at_valid', sql`${table.authenticatedAt} IS NULL OR (typeof(${table.authenticatedAt}) = 'integer' AND ${table.authenticatedAt} >= 0 AND ${table.authenticatedAt} <= ${table.createdAt})`),
 ]);
@@ -163,6 +163,8 @@ export const authOAuthTransactions = sqliteTable('auth_oauth_transactions', {
   nonceHash: text('nonce_hash').notNull(),
   codeVerifier: text('code_verifier').notNull(),
   claimToken: text('claim_token'),
+  signupPolicyVersion: text('signup_policy_version'),
+  signupConfirmedAt: integer('signup_confirmed_at'),
   createdAt: integer('created_at').notNull(),
   expiresAt: integer('expires_at').notNull(),
 }, table => [
@@ -172,6 +174,45 @@ export const authOAuthTransactions = sqliteTable('auth_oauth_transactions', {
   check('auth_oauth_transactions_link_account_valid', sql`${table.intent} != 'link' OR ${table.accountId} IS NOT NULL`),
   check('auth_oauth_transactions_reauth_valid', sql`${table.intent} != 'reauth' OR (${table.accountId} IS NOT NULL AND ${table.sessionHash} IS NOT NULL AND length(${table.sessionHash}) = 64 AND ${table.identityId} IS NOT NULL)`),
   check('auth_oauth_transactions_expiry_valid', sql`${table.expiresAt} > ${table.createdAt}`),
+  check('auth_oauth_signup_valid', sql`(${table.signupPolicyVersion} IS NULL AND ${table.signupConfirmedAt} IS NULL) OR (${table.provider} = 'google' AND ${table.intent} = 'login' AND typeof(${table.signupConfirmedAt}) = 'integer' AND ${table.signupConfirmedAt} = ${table.createdAt} AND length(${table.signupPolicyVersion}) BETWEEN 1 AND 80)`),
+]);
+
+export const authLocalCredentials = sqliteTable('auth_local_credentials', {
+  username: text('username').primaryKey(),
+  accountId: text('account_id').notNull().references(() => authAccounts.id, { onDelete: 'cascade' }),
+  passwordHash: text('password_hash').notNull(),
+  createdAt: integer('created_at').notNull(),
+}, table => [
+  uniqueIndex('auth_local_credentials_account_unique').on(table.accountId),
+  check('auth_local_username_valid', sql`length(${table.username}) BETWEEN 4 AND 24 AND ${table.username} NOT GLOB '*[^a-z0-9_]*'`),
+  check('auth_local_hash_valid', sql`length(${table.passwordHash}) BETWEEN 32 AND 512`),
+]);
+
+// Explicit preview acknowledgements are self declarations, never verified age.
+export const authRegistrationConsents = sqliteTable('auth_registration_consents', {
+  accountId: text('account_id').primaryKey().references(() => authAccounts.id, { onDelete: 'cascade' }),
+  policyVersion: text('policy_version').notNull(),
+  selfDeclared14: integer('self_declared_14').notNull(),
+  acceptedAt: integer('accepted_at').notNull(),
+}, table => [check('auth_registration_consent_valid', sql`${table.selfDeclared14} = 1 AND typeof(${table.acceptedAt}) = 'integer' AND ${table.acceptedAt} >= 0 AND length(${table.policyVersion}) BETWEEN 1 AND 80`)]);
+
+export const authLocalRequests = sqliteTable('auth_local_requests', {
+  id: text('id').primaryKey(), bindingHash: text('binding_hash').notNull(),
+  contextHash: text('context_hash').notNull(), action: text('action').notNull(),
+  createdAt: integer('created_at').notNull(), expiresAt: integer('expires_at').notNull(),
+}, table => [
+  index('auth_local_requests_binding_index').on(table.bindingHash),
+  index('auth_local_requests_expiry_index').on(table.expiresAt),
+  check('auth_local_request_action_valid', sql`${table.action} IN ('register', 'login')`),
+  check('auth_local_request_expiry_valid', sql`${table.expiresAt} > ${table.createdAt} AND ${table.expiresAt} <= ${table.createdAt} + 120000`),
+]);
+
+export const authLocalRateLimits = sqliteTable('auth_local_rate_limits', {
+  bucket: text('bucket').primaryKey(), windowStart: integer('window_start').notNull(),
+  requestCount: integer('request_count').notNull(), expiresAt: integer('expires_at').notNull(),
+}, table => [
+  index('auth_local_rate_limits_expiry_index').on(table.expiresAt),
+  check('auth_local_rate_count_valid', sql`${table.requestCount} > 0`),
 ]);
 
 // Exactly six named buckets (start/callback × three providers), never client

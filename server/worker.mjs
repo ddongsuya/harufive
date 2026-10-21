@@ -51,14 +51,15 @@ function pinnedOrigin(url, env) {
 }
 
 /** Preparation-only Worker entry. No Sites identity, secret/env spread, cron,
- * scheduled maintenance, registration or reauthentication enablement here.
+ * scheduled maintenance, public registration or reauthentication enablement here.
  * The third server-only argument is used by the separate connected adapter;
- * two-argument/default callers continue to discard all OAuth settings.
+ * two-argument/default callers continue to discard all OAuth settings. Only the
+ * dedicated gated owner preview forwards an explicitly pinned operator policy.
  * @param {Request} request
  * @param {{DB?: any, ASSETS?: {fetch: (request: Request) => Promise<Response>}, HARU_AUTH_ORIGIN?: string, [key: string]: any}} [env]
- * @param {{existingAccountLogin?: boolean}} [options]
+ * @param {{existingAccountLogin?: boolean, previewOwnerEnrollment?: {email: string, notBefore: number}|null, previewRegistration?: boolean, passwordService?: any, clientAddressHash?: string|null}} [options]
  */
-export async function handleWorkerRequest(request, env = {}, { existingAccountLogin = false } = {}) {
+export async function handleWorkerRequest(request, env = {}, { existingAccountLogin = false, previewOwnerEnrollment = null, previewRegistration = false, passwordService = null, clientAddressHash = null } = {}) {
   try {
     const url = new URL(request.url);
     // A connected deployment always needs an exact HTTPS origin; it cannot
@@ -76,11 +77,16 @@ export async function handleWorkerRequest(request, env = {}, { existingAccountLo
         ...(env.HARU_AUTH_ORIGIN === undefined ? {} : { HARU_AUTH_ORIGIN: env.HARU_AUTH_ORIGIN }) };
       if (existingAccountLogin === true) {
         for (const key of EXISTING_ACCOUNT_AUTH_KEYS) {
+          if (previewRegistration && !key.startsWith('HARU_GOOGLE_')) continue;
           if (typeof env[key] === 'string') settings[key] = env[key];
         }
       }
       return seal(await handleStandaloneRequest(request, { db: env.DB, env: settings,
-        existingAccountLogin: existingAccountLogin === true }), request.method);
+        existingAccountLogin: existingAccountLogin === true,
+        previewOwnerEnrollment: existingAccountLogin === true ? previewOwnerEnrollment : null,
+        previewRegistration: existingAccountLogin === true && previewRegistration === true,
+        passwordService: existingAccountLogin === true && previewRegistration === true ? passwordService : null,
+        clientAddressHash: existingAccountLogin === true && previewRegistration === true ? clientAddressHash : null }), request.method);
     }
     if (!PUBLIC_PATHS.has(url.pathname)) return seal(jsonFailure(404, 'NOT_FOUND'), request.method);
     if (!['GET', 'HEAD'].includes(request.method)) {

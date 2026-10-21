@@ -4,7 +4,7 @@ import { AUDIO_STORAGE_KEY, normalizeAudioSettings, createAudioController } from
 import { STORAGE_KEY, DAILY_COMPLETION_COINS, DEFAULT_EQUIPPED, CATALOG, COLLECTION, rankSummary, readLegacyRecord } from './state.js';
 import { REMINDER_STORAGE_KEY, freshReminder, normalizeReminder, validReminderTime, reminderTimeLabel, shouldOfferReminder, createCalendarReminder } from './reminders.js';
 import { createGameApi, createRequestId } from './api.js';
-import { SOCIAL_PROVIDERS, SITES_SIGN_IN, providerName, callbackNotice, createAuthApi } from './auth.js';
+import { SOCIAL_PROVIDERS, SITES_SIGN_IN, PREVIEW_POLICY_VERSION, providerName, callbackNotice, createAuthApi } from './auth.js';
 
 import { createPrivacyApi } from './privacy.js';
 import { privacyPage, guardianPage } from './privacy-views.js';
@@ -24,6 +24,8 @@ let privacyApi=createPrivacyApi(),privacyEpoch=0,privacyConfirmation=null,privac
 let privacy={loading:false,busy:false,status:null,children:[],hasMore:false,selected:null,error:'',notice:'',uncertain:false};
 let reauthAttempt=null;
 let authStatus=null,authError='',authBusy=false,authPromise=null,logoutUnconfirmed=false,authNotice=callbackNotice(location.search||'');
+let localAuthAttempt=null,authFormMode=new URLSearchParams(location.search||'').get('auth_error')==='signup_required'?'register':'login';
+let authDraft={username:'',nickname:'',ageConfirmed:false,policyAccepted:false};
 if(location.href&&location.search){
   const clean=new URL(location.href);
   if(clean.searchParams.has('auth')||clean.searchParams.has('auth_error')){
@@ -220,11 +222,94 @@ function authFeedback(){
   return notice?`<div class="auth-feedback ${notice.kind==='error'?'error':''}" role="${notice.kind==='error'?'alert':'status'}"><p>${escape(notice.text)}</p>${logoutUnconfirmed?`<button class="text-link" data-action="auth-logout" ${authBusy?'disabled':''}>로그아웃 다시 확인</button>`:'<button class="text-link" data-action="auth-dismiss">닫기</button>'}</div>`:'';
 }
 function socialLoginOptions(){
+  if(authStatus?.localAuth?.enabled||authStatus?.registration.previewOpen)return trialLoginOptions();
+  const ownerEnrollment=authStatus?.previewEnrollment?.enabled===true;
+  const availability=ownerEnrollment?'지정된 운영자 Google 계정으로만 시험 계정을 만들 수 있어요. 일반 가입은 아직 준비 중이에요.':authStatus?.providers.some(provider=>provider.enabled)?authStatus.registration.open?'사용하던 로그인 수단을 선택해 주세요.':'새 계정 가입은 준비 중이에요. 이미 연결한 계정으로 로그인할 수 있어요.':'세 가지 간편 로그인을 연결하고 있어요. 준비가 끝나면 이곳에서 시작할 수 있어요.';
   return `<div class="social-login-options" aria-label="간편 로그인">${SOCIAL_PROVIDERS.map(provider=>{
     const configured=authStatus?.providers.find(item=>item.id===provider.id)?.enabled===true;
-    const status=configured?'계속하기':authError?'연결 확인 필요':authStatus?'연결 준비 중':'확인 중';
+    const status=configured?ownerEnrollment&&provider.id==='google'?'시험 계정 만들기':'계속하기':authError?'연결 확인 필요':authStatus?'연결 준비 중':'확인 중';
     return `<button class="social-login-choice provider-${provider.id}" data-action="auth-login" data-provider="${provider.id}" ${!configured||authBusy?'disabled':''}><strong>${provider.name}</strong><span>${authBusy&&configured?'로그인 준비 중…':status}</span>${icon('arrow',true)}</button>`;
-  }).join('')}</div><p class="login-availability">${authStatus?.providers.some(provider=>provider.enabled)?authStatus.registration.open?'사용하던 로그인 수단을 선택해 주세요.':'새 계정 가입은 준비 중이에요. 이미 연결한 계정으로 로그인할 수 있어요.':'세 가지 간편 로그인을 연결하고 있어요. 준비가 끝나면 이곳에서 시작할 수 있어요.'}</p>${authError?'<button class="text-link" data-action="auth-refresh">로그인 연결 다시 확인</button>':''}`;
+  }).join('')}</div><p class="login-availability">${availability}</p>${authError?'<button class="text-link" data-action="auth-refresh">로그인 연결 다시 확인</button>':''}`;
+}
+function readAuthDraft(){
+  const form=document.querySelector('#local-auth-form');
+  if(form){
+    authDraft.username=document.querySelector('#auth-username')?.value||'';
+    const nickname=document.querySelector('#auth-nickname');if(nickname)authDraft.nickname=nickname.value;
+  }
+  const age=document.querySelector('#auth-age'),policy=document.querySelector('#auth-policy');
+  if(age)authDraft.ageConfirmed=age.checked===true;
+  if(policy)authDraft.policyAccepted=policy.checked===true;
+}
+function wipeAuthPasswords(){
+  for(const id of ['auth-password','auth-password-confirm']){const input=document.getElementById(id);if(input)input.value='';}
+}
+function signupConfirmation(){
+  readAuthDraft();
+  if(!authDraft.ageConfirmed||!authDraft.policyAccepted){
+    authError='만 14세 이상 여부와 이용·개인정보 안내 확인 항목을 모두 선택해 주세요.';render();
+    document.getElementById(authDraft.ageConfirmed?'auth-policy':'auth-age')?.focus();return null;
+  }
+  return {ageConfirmed:true,policyAccepted:true,policyVersion:PREVIEW_POLICY_VERSION};
+}
+function trialLoginOptions(){
+  const canRegister=authStatus?.registration.previewOpen===true;
+  const signup=authFormMode==='register'&&canRegister;
+  const localEnabled=authStatus?.localAuth.enabled===true;
+  const localRegistration=canRegister&&authStatus?.localAuth.registrationOpen===true;
+  const locked=authBusy||logoutUnconfirmed;
+  const tabs=`<div class="auth-entry-tabs" role="group" aria-label="계정 이용 방식"><button type="button" data-action="auth-mode" data-mode="login" aria-pressed="${!signup}" ${locked?'disabled':''}>로그인</button><button type="button" data-action="auth-mode" data-mode="register" aria-pressed="${signup}" ${!canRegister||locked?'disabled':''}>회원가입</button></div>`;
+  const confirmations=signup?`<div class="auth-confirmations"><label for="auth-age"><input id="auth-age" type="checkbox" ${authDraft.ageConfirmed?'checked':''} ${locked?'disabled':''}><span>만 14세 이상입니다.</span></label><label for="auth-policy"><input id="auth-policy" type="checkbox" ${authDraft.policyAccepted?'checked':''} ${locked?'disabled':''}><span>이용 안내와 개인정보 안내를 읽고 동의합니다.</span></label><div class="auth-policy-actions"><button type="button" class="text-link" data-action="policy-open" data-kind="terms">이용 안내 읽기</button><button type="button" class="text-link" data-action="policy-open" data-kind="privacy">개인정보 안내 읽기</button></div><p>이 항목은 이용자 본인의 확인이며, 본인·연령 인증을 대신하지 않아요.</p></div>`:'';
+  const social=`<div class="social-login-options" aria-label="간편 로그인">${SOCIAL_PROVIDERS.map(provider=>{
+    const enabled=provider.id==='google'&&authStatus.providers.find(item=>item.id==='google')?.enabled===true;
+    const label=enabled?signup?'Google로 가입하기':'Google로 로그인':provider.name;
+    return `<button type="button" class="social-login-choice provider-${provider.id}" data-action="${signup?'auth-google-signup':'auth-login'}" data-provider="${provider.id}" ${!enabled||locked?'disabled':''}><strong>${label}</strong><span>${enabled?authBusy?'연결 중…':'계속하기':'준비 중'}</span>${icon('arrow',true)}</button>`;
+  }).join('')}</div>`;
+  const localForm=localEnabled&&(!signup||localRegistration)?`<div class="login-divider"><span>또는 아이디로 ${signup?'가입':'로그인'}하기</span></div><form id="local-auth-form" class="local-auth-form" data-auth-form="${signup?'register':'login'}" action="/api/auth/local/${signup?'register':'login'}" method="post" novalidate aria-busy="${authBusy}"><label for="auth-username">아이디</label><input id="auth-username" class="field-input" name="username" type="text" minlength="4" maxlength="24" autocomplete="username" autocapitalize="none" spellcheck="false" value="${escape(authDraft.username)}" ${locked?'disabled':''} aria-describedby="auth-username-help"><p id="auth-username-help">영문 소문자·숫자·밑줄(_)로 4~24자</p>${signup?`<label for="auth-nickname">닉네임</label><input id="auth-nickname" class="field-input" name="nickname" type="text" minlength="2" maxlength="12" autocomplete="nickname" value="${escape(authDraft.nickname)}" ${locked?'disabled':''} aria-describedby="auth-nickname-help"><p id="auth-nickname-help">한글·영문·숫자·공백으로 2~12자</p>`:''}<label for="auth-password">비밀번호</label><input id="auth-password" class="field-input" name="password" type="password" minlength="15" maxlength="128" autocomplete="${signup?'new-password':'current-password'}" ${locked?'disabled':''} aria-describedby="auth-password-help"><p id="auth-password-help">15~128자, 공백도 사용할 수 있어요.</p>${signup?`<label for="auth-password-confirm">비밀번호 확인</label><input id="auth-password-confirm" class="field-input" name="password-confirm" type="password" minlength="15" maxlength="128" autocomplete="new-password" ${locked?'disabled':''}>`:''}<button type="submit" class="btn full" data-action="auth-local-submit" ${locked?'disabled':''}>${authBusy?'확인 중…':signup?'아이디로 가입하기':'아이디로 로그인'}</button></form>`:'';
+  return `${tabs}${signup?'<p class="login-availability">비공개 시험 서비스에 가입해요. 이용할 계정을 선택해 주세요.</p>':''}${confirmations}${social}${localForm}${signup&&localRegistration?'<p class="login-availability">아이디와 비밀번호를 기억해 주세요. 시험 운영 중에는 비밀번호 찾기를 지원하지 않아요.</p>':''}${!canRegister?'<p class="login-availability">새 계정 가입은 준비 중이에요. 이미 가입한 계정으로 로그인해 주세요.</p>':''}`;
+}
+function localAuthError(error,signup){
+  if(error?.status===429)return '요청이 잠시 몰렸어요. 잠시 후 다시 시도해 주세요.';
+  if(error?.code==='AUTH_RESTART_REQUIRED')return '로그인 화면을 새로고침한 뒤 다시 시도해 주세요.';
+  if(['INVALID_CREDENTIALS','LOCAL_LOGIN_FAILED','SIGN_IN_REQUIRED','AUTHENTICATION_FAILED'].includes(error?.code)||error?.status===401)return '아이디 또는 비밀번호를 확인해 주세요.';
+  if(['USERNAME_TAKEN','USERNAME_UNAVAILABLE','ACCOUNT_EXISTS'].includes(error?.code))return '사용할 수 없는 아이디예요. 다른 아이디를 입력해 주세요.';
+  if(['REGISTRATION_CLOSED','SIGNUP_CLOSED','AUTH_NOT_CONFIGURED'].includes(error?.code))return '지금은 회원가입을 준비 중이에요. 잠시 후 다시 확인해 주세요.';
+  if(error?.code==='INVALID_SIGNUP_CONFIRMATION')return '회원가입 확인 항목을 다시 확인해 주세요.';
+  return signup?'회원가입 결과를 확인하지 못했어요. 로그인 화면에서 같은 아이디로 확인해 주세요.':'로그인 결과를 확인하지 못했어요. 연결 상태를 확인하고 다시 시도해 주세요.';
+}
+function cancelLocalAuth(){
+  wipeAuthPasswords();
+  if(!localAuthAttempt)return;
+  localAuthAttempt=null;authApi.cancelPending();authBusy=false;
+  authError='요청 결과를 아직 확인하지 못했어요. 화면으로 돌아오면 로그인 상태를 다시 확인할게요.';
+}
+async function submitLocalAuth(){
+  if(disposed||authBusy||authPromise||pending||transaction||syncing||logoutUnconfirmed||state||!authStatus?.localAuth.enabled)return;
+  const signup=authFormMode==='register';
+  if(signup&&(!authStatus.localAuth.registrationOpen||!authStatus.registration.previewOpen))return;
+  readAuthDraft();
+  const username=authDraft.username,password=document.querySelector('#auth-password')?.value||'';
+  const nickname=authDraft.nickname.trim().replace(/\s+/g,' ');
+  let invalid='',field='auth-username';
+  if(!/^[a-z0-9_]{4,24}$/.test(username))invalid='아이디는 영문 소문자·숫자·밑줄(_)로 4~24자를 입력해 주세요.';
+  else if(password.length<15||password.length>128){invalid='비밀번호는 공백을 포함해 15~128자를 입력해 주세요.';field='auth-password';}
+  else if(signup&&!/^[가-힣ㄱ-ㅎㅏ-ㅣA-Za-z0-9 ]{2,12}$/.test(nickname)){invalid='닉네임은 한글·영문·숫자·공백으로 2~12자를 입력해 주세요.';field='auth-nickname';}
+  else if(signup&&password!==document.querySelector('#auth-password-confirm')?.value){invalid='비밀번호 확인이 일치하지 않아요.';field='auth-password-confirm';}
+  if(invalid){authError=invalid;render();document.getElementById(field)?.focus();return;}
+  const confirmation=signup?signupConfirmation():undefined;if(signup&&!confirmation)return;
+  const input={username,password,...(signup?{nickname,...confirmation}:{})};
+  const attempt={};localAuthAttempt=attempt;authBusy=true;authError='';authNotice=null;wipeAuthPasswords();render();setRequestControls();
+  let success=false;
+  try{
+    if(signup)await authApi.localRegister(input);else await authApi.localLogin(input);
+    if(disposed||localAuthAttempt!==attempt)return;
+    success=true;authDraft={username:'',nickname:'',ageConfirmed:false,policyAccepted:false};authFormMode='login';
+  }catch(error){if(!disposed&&localAuthAttempt===attempt)authError=localAuthError(error,signup);}
+  finally{
+    input.password='';
+    if(localAuthAttempt===attempt){localAuthAttempt=null;authBusy=false;if(!disposed){render();setRequestControls();}}
+  }
+  if(success&&!disposed){await Promise.allSettled([syncAuth(),syncState()]);}
 }
 async function syncAuth(){
   if(disposed||authBusy||logoutUnconfirmed)return;
@@ -238,16 +323,17 @@ async function syncAuth(){
   })();
   return authPromise;
 }
-async function beginLogin(provider,intent='login'){
+async function beginLogin(provider,intent='login',signup){
   if(authBusy||disposed)return;
   if(logoutUnconfirmed){toast('먼저 로그아웃 처리 결과를 다시 확인해 주세요.');return;}
   if(pending||transaction||syncing){toast('먼저 진행 중인 요청의 결과를 확인해 주세요.');return;}
   if(provider==='chatgpt'&&!authStatus?.sites.enabled)return;
   if(provider!=='chatgpt'&&!authStatus?.providers.find(item=>item.id===provider)?.enabled)return;
   if(intent==='link'&&!state)return;
-  authBusy=true;authError='';authNotice=null;render();setRequestControls();
+  if(signup!==undefined&&(provider!=='google'||intent!=='login'||!authStatus?.registration.previewOpen))return;
+  wipeAuthPasswords();authBusy=true;authError='';authNotice=null;render();setRequestControls();
   try{
-    const url=provider==='chatgpt'?await authApi.sitesStart():await authApi.start(provider,intent);
+    const url=provider==='chatgpt'?await authApi.sitesStart():await authApi.start(provider,intent,undefined,signup);
     if(disposed)return;
     showModal(`${escape(providerName(provider))} 로그인으로 이동해요.`,intent==='link'?'연결할 계정으로 로그인하면 지금의 캐릭터와 기록에 로그인 수단이 추가돼요.':'로그인을 마치면 하루다섯으로 돌아와요.',`<a class="btn full" data-auth-continue href="${escape(url)}" target="_top">로그인 화면 열기 ${icon('arrow',true)}</a>`,`<p class="account-caption">새 화면이 열리지 않으면 위 버튼을 눌러 주세요.</p>`);
     // A normal top-level anchor also leaves a usable fallback when embedded navigation is blocked.
@@ -271,6 +357,10 @@ async function signOut(){
   finally{authBusy=false;if(!disposed){render();setRequestControls();await syncAuth();}}
 }
 function releaseInfoDialog(){
+  if(authStatus?.localAuth?.enabled||authStatus?.registration.previewOpen){
+    showModal('하루다섯 비공개 시험 운영','직접 가입과 Google 로그인으로 게임을 이용해요.',`<button class="btn full" data-action="close-modal">확인했어요</button>`,`<div class="info-lines"><div><strong>아이디 가입 또는 Google</strong>회원가입에서 아이디·비밀번호·닉네임을 만들거나 Google로 가입할 수 있어요. 카카오와 네이버는 준비 중이에요. 가입한 계정으로 로그인하면 게임 기록을 이어가요.</div><div><strong>만 14세 이상</strong>가입할 때 만 14세 이상 여부와 이용·개인정보 안내를 확인해요. 이 확인은 실제 본인·연령 인증을 대신하지 않아요.</div><div><strong>아이디와 비밀번호를 기억해 주세요</strong>시험 운영 중에는 비밀번호 찾기를 지원하지 않아요. 로그인한 뒤 내 정보에서 Google을 연결하면 같은 게임 계정으로 이용할 수 있어요.</div><div><strong>무료 플레이</strong>게임은 무료이며 현금 유료 상품과 실제 광고는 제공하지 않아요.</div><div><strong>계정과 기록</strong>다른 계정으로 가입하면 기록도 따로 생겨요. 사용하던 계정의 내 정보에서 Google을 연결해 주세요. 탈퇴·삭제 등 정보 관리 절차는 준비 중이며 문의할 수 있어요.</div><div><strong>운영 문의</strong>${supportContact()}</div></div>`);
+    return;
+  }
   showModal('새 친구들을 맞이할 준비 중이에요.','간편 로그인과 정식 운영을 준비하고 있어요.',`<button class="btn full" data-action="close-modal">확인했어요</button>`,`<div class="info-lines"><div><strong>카카오 · Google · 네이버</strong>내 정보에서 로그인 수단을 연결하면 같은 게임 계정으로 이어서 이용할 수 있어요. 현재 연결 준비 중인 버튼은 아직 사용할 수 없어요.</div><div><strong>만 14세 이상 이용자를 위한 게임이에요</strong>만 14세 미만 어린이의 가입과 이용은 제공하지 않아요. 게임물 등급은 아직 확정되지 않았어요.</div><div><strong>가입과 간편 로그인은 아직 준비 중이에요</strong>연령 확인 절차를 준비하고 있어요. 연령 확인, 이용약관과 개인정보 안내, 탈퇴·삭제 절차를 갖춘 뒤 가입을 열게요.</div><div><strong>무료 플레이와 광고 수익 계획</strong>게임은 무료로 이용하고, 현금 유료 상품은 판매하지 않아요. 광고 수익으로 운영할 계획이며 실제 광고는 아직 연결하지 않았어요.</div><div><strong>기존 계정을 먼저 확인해 주세요</strong>다른 로그인으로 새 계정을 만들면 기록이 따로 생길 수 있어요. 사용하던 계정의 내 정보에서 로그인을 연결해 주세요.</div><div><strong>도움이 필요할 때</strong>게임 이용과 내 정보에 관한 문의는 아래 주소로 보내 주세요.${supportContact()}</div></div>`);
 }
 function clearPersonalState(error){
@@ -335,8 +425,12 @@ function refreshRetryControls(){
 }
 function render(){
   if(disposed)return;
+  readAuthDraft();
+  const entryForm=document.querySelector('#local-auth-form');
+  const passwordValues=!state&&ui.view==='home'&&!authBusy&&!document.hidden&&entryForm?.dataset.authForm===authFormMode
+    ?['auth-password','auth-password-confirm'].map(id=>[id,document.getElementById(id)?.value||'']):[];
   const focused=captureFocus();clearInterval(memoryTimer);clearInterval(elapsedTimer);memoryTimer=null;elapsedTimer=null;
-  if(!state){app.innerHTML=['privacy','guardian'].includes(ui.view)?publicPrivacyShell(ui.view==='guardian'?guardianPage():privacySurface()):entryView();drawCanvases(app);refreshRetryControls();document.title='하루다섯 · 매일 다섯 문제';return;}
+  if(!state){app.innerHTML=['privacy','guardian'].includes(ui.view)?publicPrivacyShell(ui.view==='guardian'?guardianPage():privacySurface()):entryView();for(const [id,value] of passwordValues){const input=document.getElementById(id);if(input)input.value=value;}drawCanvases(app);refreshRetryControls();restoreFocus(focused);document.title='하루다섯 · 매일 다섯 문제';return;}
   redactExpiredMemory();
   const views={home:homeView,challenge:challengeView,result:resultView,ranking:rankingView,profile:profileView,shop:shopView,privacy:privacySurface,guardian:guardianPage};
   app.innerHTML=shell((views[ui.view]||homeView)());drawCanvases(app);setRequestControls();
@@ -346,7 +440,7 @@ function render(){
 }
 function go(view){
   const next=VALID_VIEWS.includes(view)?view:'home';
-  if(ui.view!==next){resetPrivacy();}
+  if(ui.view!==next){cancelLocalAuth();resetPrivacy();}
   if(view==='challenge'&&state){void startDaily();return;}
   ui.view=!state&&!['privacy','guardian'].includes(next)?'home':next;render();history.replaceState(null,'','#'+ui.view);
   window.scrollTo({top:0,behavior:'instant'});document.querySelector('#main')?.focus({preventScroll:true});
@@ -446,7 +540,7 @@ async function changeItem(action,itemId){
 function accountCard(){
   const linked=authStatus?.account?.linkedProviders||[];
   const current=authStatus?.account?.provider;
-  return `<section class="card record-history account-records"><div class="between"><div><h3>계정과 저장된 기록</h3><p class="account-caption">같은 계정으로 다른 기기에서도 이어서 이용해요.</p></div><button class="text-link" data-action="auth-logout" ${authBusy?'disabled':''}>로그아웃</button></div><div class="account-login-heading"><strong>로그인 연결</strong><span class="tag neutral">${current?escape(providerName(current))+'로 이용 중':'연결 확인 중'}</span></div><p class="account-caption">자주 쓰는 로그인을 추가하고 같은 친구와 기록을 만나요.</p><div class="account-login-list">${SOCIAL_PROVIDERS.map(provider=>{
+  return `<section class="card record-history account-records"><div class="between"><div><h3>계정과 저장된 기록</h3><p class="account-caption">같은 계정으로 다른 기기에서도 이어서 이용해요.</p></div><button class="text-link" data-action="auth-logout" ${authBusy?'disabled':''}>로그아웃</button></div><div class="account-login-heading"><strong>로그인 연결</strong><span class="tag neutral">${current?escape(providerName(current))+(current==='local'?'으로 이용 중':'로 이용 중'):'연결 확인 중'}</span></div><p class="account-caption">자주 쓰는 로그인을 추가하고 같은 친구와 기록을 만나요.</p><div class="account-login-list">${SOCIAL_PROVIDERS.map(provider=>{
     const isLinked=linked.includes(provider.id),enabled=authStatus?.providers.find(item=>item.id===provider.id)?.enabled===true;
     return `<div class="account-login-row"><div><strong>${provider.name}</strong><small>${isLinked?'이 게임 계정에 연결했어요.':enabled?'지금의 게임 계정에 추가할 수 있어요.':authError?'연결 상태를 다시 확인해 주세요.':'간편 로그인 연결을 준비하고 있어요.'}</small></div><button class="btn secondary small" data-action="auth-link" data-provider="${provider.id}" ${isLinked||!enabled||authBusy?'disabled':''}>${isLinked?'연결됨':enabled?'연결하기':authStatus?'준비 중':'확인 중'}</button></div>`;
   }).join('')}</div><p class="account-caption">다른 계정에 연결된 로그인은 자동으로 합쳐지지 않아요. 사용하던 계정에서 연결해 주세요.</p><div class="account-login-actions">${authError?'<button class="text-link" data-action="auth-refresh">연결 다시 확인</button>':''}<button class="text-link" data-action="release-info">로그인 · 출시 준비 안내</button>${supportContact()}</div><div class="privacy-account-links"><button class="btn secondary" data-action="privacy-open">${icon('shield',true)} 나의 정보 관리</button><button class="text-link" data-action="guardian-open">이용 연령 안내</button></div>${policyLinks()}<div class="account-data-download"><button class="btn secondary" data-action="export-server">${icon('book',true)} 내 서비스 기록 다운로드</button><p class="account-caption">서비스 기록 파일에는 나의 게임 정보가 담겨 있어요. 다운로드한 파일은 안전하게 보관해 주세요.</p></div>${legacyRecord?`<div class="legacy-record"><strong>이 브라우저의 이전 테스트 기록</strong><p>${escape(legacyRecord.name)} · 공식 도전 ${fmt(legacyRecord.dailyCount)}일 · ${fmt(legacyRecord.coins)} 테스트 코인 · 친구 ${fmt(legacyRecord.friends)}종</p><p>이전 파일을 그대로 보관하고 있어요. 계정의 점수·코인과 합산하지 않아요.</p><button class="text-link" data-action="export-legacy">이전 테스트 기록 JSON 받기 ${icon('arrow',true)}</button></div>`:''}</section>`;
@@ -700,6 +794,17 @@ async function handleAction(event){
   if(a==='auth-sites'){event.preventDefault?.();await beginLogin('chatgpt');return;}
   if(a==='auth-reauth'){await beginReauthentication(button.dataset.provider);return;}
   if(a==='auth-login'){await beginLogin(button.dataset.provider);return;}
+  if(a==='auth-mode'){
+    if(authBusy||logoutUnconfirmed||!['login','register'].includes(button.dataset.mode)||button.dataset.mode==='register'&&!authStatus?.registration.previewOpen)return;
+    readAuthDraft();wipeAuthPasswords();authFormMode=button.dataset.mode;authDraft.ageConfirmed=false;authDraft.policyAccepted=false;
+    const age=document.getElementById('auth-age'),policy=document.getElementById('auth-policy');if(age)age.checked=false;if(policy)policy.checked=false;
+    authError='';authNotice=null;render();document.getElementById('auth-username')?.focus();return;
+  }
+  if(a==='auth-google-signup'){
+    if(button.dataset.provider!=='google'||authBusy||logoutUnconfirmed||!authStatus?.registration.previewOpen)return;
+    const signup=signupConfirmation();if(signup)await beginLogin('google','login',signup);return;
+  }
+  if(a==='auth-local-submit'){event.preventDefault?.();await submitLocalAuth();return;}
   if(a==='auth-logout'){await signOut();return;}
   if(a==='auth-refresh'){await syncAuth();return;}
   if(a==='auth-dismiss'){authError='';authNotice=null;render();return;}
@@ -783,6 +888,7 @@ async function handleAction(event){
 const listeners=[];
 function listen(target,event,handler){target.addEventListener(event,handler);listeners.push(()=>target.removeEventListener(event,handler));}
 listen(app,'click',handleAction);listen(modal,'click',handleAction);
+listen(app,'submit',async event=>{if(event.target.id!=='local-auth-form')return;event.preventDefault();await submitLocalAuth();});
 listen(modal,'input',event=>{const kind=event.target.dataset?.audioVolume;if(!['musicVolume','effectsVolume'].includes(kind))return;const percent=Number(event.target.value);if(!Number.isFinite(percent))return;applyAudioSettings({[kind]:Math.max(0,Math.min(100,percent))/100});if(audioSettings.enabled)wakeAudio();});
 function dismissModal(){privacyConfirmation=null;privacyModal=false;modal.close();modal.innerHTML='';refreshGameModal=null;}
 listen(modal,'cancel',event=>{event.preventDefault();dismissModal();});
@@ -793,14 +899,15 @@ listen(window,'storage',event=>{
   if(event.key===REMINDER_STORAGE_KEY){reminder=readReminder();render();}
   if(event.key===AUDIO_STORAGE_KEY){audioSettings=readAudioSettings();sound.setSettings(audioSettings);refreshAudioUI(sound.getStatus());}
 });
-listen(document,'visibilitychange',()=>{sound.setHidden(document.hidden);if(!document.hidden)return refreshFocusedSession();else{resetPrivacy();if(ui.view==='privacy')render();redactExpiredMemory();}});
+listen(document,'visibilitychange',()=>{sound.setHidden(document.hidden);if(!document.hidden)return refreshFocusedSession();else{cancelLocalAuth();resetPrivacy();if(ui.view==='privacy')render();redactExpiredMemory();}});
 listen(window,'focus',refreshFocusedSession);
-listen(window,'pagehide',()=>{sound.setHidden(true);resetPrivacy();if(ui.view==='privacy')render();});
+listen(window,'pagehide',()=>{sound.setHidden(true);cancelLocalAuth();resetPrivacy();if(ui.view==='privacy')render();});
 listen(window,'pageshow',()=>{sound.setHidden(document.hidden);return refreshFocusedSession();});
 const dateTimer=setInterval(()=>{if(state&&!document.hidden&&dateKey(new Date(api.now()))!==today)void syncState();},30000);
 const retryTimer=setInterval(refreshRetryControls,1000);
 function destroy(){
   if(disposed)return;
+  cancelLocalAuth();
   disposed=true;for(const remove of listeners)remove();
   for(const timer of [memoryTimer,elapsedTimer,dateTimer,retryTimer])clearInterval(timer);
   for(const timer of [toastTimer,celebrationTimer])clearTimeout(timer);

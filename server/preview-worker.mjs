@@ -1,5 +1,6 @@
 import { EXISTING_ACCOUNT_AUTH_KEYS, handleWorkerRequest } from './worker.mjs';
 import { authCredentialState } from './auth-service.mjs';
+import { createPasswordService, clientAddressHash } from './password-client.mjs';
 
 const USERNAME = 'harufive';
 // Canonical base64url encoding of 32 bytes; the final two padding bits are zero.
@@ -67,13 +68,14 @@ function credentials(header) {
  * The generated entry supplies a fixed origin and public-assets adapter. This
  * default wrapper never forwards DB bindings or account keys. The separate
  * connected entry explicitly opts into existing-account login after this gate.
+ * A distinct owner entry may also pin a single private operator enrollment.
  * Request bodies, headers and environment flags cannot select that mode.
  * @param {Request} request
  * @param {{HARU_AUTH_ORIGIN?: string, HARU_PREVIEW_PASSWORD?: string,
  * ASSETS?: {fetch: (request: Request) => Promise<Response>}, [key: string]: any}} [env]
- * @param {{existingAccountLogin?: boolean}} [options]
+ * @param {{existingAccountLogin?: boolean, previewOwnerEnrollment?: {email: string, notBefore: number}|null, previewRegistration?: boolean}} [options]
  */
-export async function handlePreviewWorkerRequest(request, env = {}, { existingAccountLogin = false } = {}) {
+export async function handlePreviewWorkerRequest(request, env = {}, { existingAccountLogin = false, previewOwnerEnrollment = null, previewRegistration = false } = {}) {
   try {
     const origin = configuredOrigin(env.HARU_AUTH_ORIGIN);
     if (!origin) return seal(failure(503, 'PREVIEW_NOT_CONFIGURED'), request.method);
@@ -109,8 +111,8 @@ export async function handlePreviewWorkerRequest(request, env = {}, { existingAc
       for (const id of ['google', 'kakao', 'naver']) {
         const prefix = `HARU_${id.toUpperCase()}`;
         providers[id] = {
-          clientId: authCredentialState(env[`${prefix}_CLIENT_ID`]),
-          clientSecret: authCredentialState(env[`${prefix}_CLIENT_SECRET`]),
+          clientId: authCredentialState(previewRegistration && id !== 'google' ? undefined : env[`${prefix}_CLIENT_ID`]),
+          clientSecret: authCredentialState(previewRegistration && id !== 'google' ? undefined : env[`${prefix}_CLIENT_SECRET`]),
         };
       }
       // A present value has passed syntax checks only, not provider verification.
@@ -126,11 +128,17 @@ export async function handlePreviewWorkerRequest(request, env = {}, { existingAc
       // request cannot cause a DB query or access provider configuration.
       workerEnv.DB = env.DB;
       for (const key of EXISTING_ACCOUNT_AUTH_KEYS) {
+        if (previewRegistration && !key.startsWith('HARU_GOOGLE_')) continue;
         if (typeof env[key] === 'string') workerEnv[key] = env[key];
       }
     }
+    const signup = existingAccountLogin === true && previewRegistration === true;
     const response = await handleWorkerRequest(downstream, workerEnv, {
       existingAccountLogin: existingAccountLogin === true,
+      previewOwnerEnrollment: existingAccountLogin === true ? previewOwnerEnrollment : null,
+      previewRegistration: signup,
+      passwordService: signup ? createPasswordService(env.PASSWORD_HASHER) : null,
+      clientAddressHash: signup ? await clientAddressHash(request) : null,
     });
     return seal(response, request.method, { applicationResponse: true });
   } catch { return seal(failure(503, 'PREVIEW_UNAVAILABLE'), request.method); }

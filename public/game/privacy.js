@@ -1,4 +1,4 @@
-import { GameApiError } from './api.js';
+import { GameApiError, applicationResponseStatus } from './api.js';
 
 export class PrivacyApiError extends GameApiError {
   constructor(message, options = {}) { super(message, options); this.name = 'PrivacyApiError'; }
@@ -91,9 +91,10 @@ function normalizeExport(raw) {
 }
 
 async function readJson(response, maxBytes, signal) {
+  const responseStatus = applicationResponseStatus(response);
   if (response.headers.get('Content-Type')?.split(';')[0].trim().toLowerCase() !== 'application/json') throw invalid();
   const length = response.headers.get('Content-Length');
-  if (length !== null && (!/^\d+$/.test(length) || Number(length) > maxBytes)) throw new PrivacyApiError('자료가 너무 커서 이 화면에서 받지 못했어요.', { code: 'PRIVACY_RESPONSE_TOO_LARGE', status: response.status, retryable: false });
+  if (length !== null && (!/^\d+$/.test(length) || Number(length) > maxBytes)) throw new PrivacyApiError('자료가 너무 커서 이 화면에서 받지 못했어요.', { code: 'PRIVACY_RESPONSE_TOO_LARGE', status: responseStatus, retryable: false });
   const reader = response.body?.getReader();
   if (!reader) throw invalid();
   const cancel = () => { reader.cancel().catch(() => {}); };
@@ -107,7 +108,7 @@ async function readJson(response, maxBytes, signal) {
       size += value.byteLength;
       if (size > maxBytes) {
         await reader.cancel();
-        throw new PrivacyApiError('자료가 너무 커서 이 화면에서 받지 못했어요.', { code: 'PRIVACY_RESPONSE_TOO_LARGE', status: response.status, retryable: false });
+        throw new PrivacyApiError('자료가 너무 커서 이 화면에서 받지 못했어요.', { code: 'PRIVACY_RESPONSE_TOO_LARGE', status: responseStatus, retryable: false });
       }
       chunks.push(value);
     }
@@ -152,19 +153,19 @@ export function createPrivacyApi({ fetchImpl = (...args) => fetch(...args), time
             ...(context ? { 'X-Haru-Account': context } : {}) },
           ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal: controller.signal,
         });
-        responseStatus = response.status;
+        responseStatus = applicationResponseStatus(response);
         assertCurrent(epoch, sequence, path);
         const rawRetry = Number(response.headers.get('Retry-After'));
         const retryAfter = Number.isFinite(rawRetry) ? Math.min(3600, Math.max(0, Math.ceil(rawRetry))) : 0;
         const payload = await readJson(response, limit, controller.signal);
         assertCurrent(epoch, sequence, path);
         if (!response.ok) {
-          if (response.status === 429) retryUntil = monotonic() + Math.max(1, retryAfter) * 1000;
-          if (response.status === 401 || payload?.code === 'ACCOUNT_CHANGED') { accountContext = null; allowedChildren.clear(); generation++; }
+          if (responseStatus === 429) retryUntil = monotonic() + Math.max(1, retryAfter) * 1000;
+          if (responseStatus === 401 || payload?.code === 'ACCOUNT_CHANGED') { accountContext = null; allowedChildren.clear(); generation++; }
           throw new PrivacyApiError(typeof payload?.message === 'string' && payload.message.length <= 240 ? payload.message : '정보 관리 요청을 처리하지 못했어요.', {
             code: typeof payload?.code === 'string' && /^[A-Z][A-Z0-9_]{0,63}$/.test(payload.code) ? payload.code : 'PRIVACY_REQUEST_FAILED',
-            status: response.status, retryAfter: response.status === 429 ? Math.max(1, retryAfter) : retryAfter,
-            retryable: response.status >= 500 || response.status === 408 || response.status === 429,
+            status: responseStatus, retryAfter: responseStatus === 429 ? Math.max(1, retryAfter) : retryAfter,
+            retryable: responseStatus >= 500 || responseStatus === 408 || responseStatus === 429,
           });
         }
         return normalize(payload);

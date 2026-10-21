@@ -6,6 +6,13 @@ export class GameApiError extends Error {
   }
 }
 
+// The password-protected preview uses HTTP 401 only for its browser challenge.
+// Keep application session errors distinct without changing normal 403 denials.
+export function applicationResponseStatus(response) {
+  return response.status===403&&response.headers?.get?.('X-Haru-Application-Status')==='401'
+    ?401:response.status;
+}
+
 export function createRequestId() {
   if(globalThis.crypto?.randomUUID)return globalThis.crypto.randomUUID();
   const bytes=new Uint8Array(16);
@@ -30,14 +37,15 @@ export function createGameApi({fetcher=(...args)=>fetch(...args),monotonic=()=>p
           ...((body||action==='export')&&expectedPlayerId?{'X-Haru-Player':expectedPlayerId}:{})},
         ...(body?{body:JSON.stringify(body)}:{}),signal:controller.signal
       });
+      const status=applicationResponseStatus(response);
       let payload;
       try{payload=await response.json();}
-      catch{throw new GameApiError('서버 응답을 확인하지 못했어요. 같은 요청으로 다시 확인해 주세요.',{status:response.status,code:'INVALID_RESPONSE'});}
+      catch{throw new GameApiError('서버 응답을 확인하지 못했어요. 같은 요청으로 다시 확인해 주세요.',{status,code:'INVALID_RESPONSE'});}
       const retryAfter=Math.max(0,Number(response.headers?.get?.('Retry-After'))||0);
-      if(response.status===429)retryUntil=monotonic()+Math.max(1,retryAfter)*1000;
+      if(status===429)retryUntil=monotonic()+Math.max(1,retryAfter)*1000;
       if(!response.ok)throw new GameApiError(typeof payload?.message==='string'?payload.message:'요청을 처리하지 못했어요.',{
-        status:response.status,code:payload?.code||'REQUEST_FAILED',
-        retryable:response.status>=500||response.status===408||response.status===429||payload?.code==='BUSY',
+        status,code:payload?.code||'REQUEST_FAILED',
+        retryable:status>=500||status===408||status===429||payload?.code==='BUSY',
         retryAfter,
         signInUrl:payload?.signInUrl
       });

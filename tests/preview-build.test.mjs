@@ -190,7 +190,10 @@ test('built connected module delays DB and OAuth reads until authenticated and k
     Object.defineProperty(env, name, { get() { assert.fail(`Unapproved environment read: ${name}`); } });
   }
   for (const route of ['/', '/api/auth/status', '/api/auth/google/callback?code=x&state=y']) {
-    assert.equal((await module.default.fetch(new Request(`${PREVIEW_ORIGIN}${route}`), env)).status, 401);
+    const response = await module.default.fetch(new Request(`${PREVIEW_ORIGIN}${route}`), env);
+    assert.equal(response.status, 401);
+    assert.equal(response.headers.get('WWW-Authenticate'), 'Basic realm="harufive-preview", charset="UTF-8"');
+    assert.equal(response.headers.get('X-Haru-Application-Status'), null);
   }
   assert.deepEqual(reads, []);
   assert.equal((await module.default.fetch(new Request('https://other.example/', { headers: { authorization } }), env)).status, 403);
@@ -209,7 +212,13 @@ test('built connected module delays DB and OAuth reads until authenticated and k
   const policy = await module.default.fetch(new Request(`${PREVIEW_ORIGIN}/game/policy-views.js`, { headers: { authorization } }), env);
   assert.equal(policy.status, 200);
   const bootstrap = await module.default.fetch(new Request(`${PREVIEW_ORIGIN}/api/game/bootstrap`, { headers: { authorization } }), env);
-  assert.equal(bootstrap.status, 401);
+  assert.equal(bootstrap.status, 403);
+  assert.equal(bootstrap.headers.get('X-Haru-Application-Status'), '401');
+  assert.equal(bootstrap.headers.get('WWW-Authenticate'), null);
+  assert.equal((await bootstrap.json()).code, 'SIGN_IN_REQUIRED');
+  const health = await module.default.fetch(new Request(`${PREVIEW_ORIGIN}/api/health`, { headers: { authorization } }), env);
+  assert.equal(health.status, 200);
+  assert.equal(health.headers.get('X-Haru-Application-Status'), null);
   const code = await readFile(result.output, 'utf8');
   assert.doesNotMatch(code, /connected-build-fixture-secret|sourceMappingURL=/);
 });

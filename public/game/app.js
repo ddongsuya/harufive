@@ -292,7 +292,9 @@ function applySnapshot(payload){
   today=payload.today;connection='ready';
   if(oldId&&oldId!==state.playerId){resetPrivacy();ui.selected=null;ui.result=null;ui.review=false;ui.view='home';ui.premiumPreview=false;hiddenMemories.clear();modal.close();modal.innerHTML='';refreshGameModal=null;transaction=null;}
   if(oldQuestion!==memoryKey())ui.selected=null;
-  if(previousDay!==today){resetPrivacy();ui.selected=null;ui.result=null;ui.review=false;ui.view='home';modal.close();refreshGameModal=null;}
+  // The first snapshot establishes the server date; a different device date
+  // must not discard the requested callback view before it can check access.
+  if(oldId&&previousDay!==today){resetPrivacy();ui.selected=null;ui.result=null;ui.review=false;ui.view='home';modal.close();refreshGameModal=null;}
   if(ui.result?.mode==='daily')ui.result=state.results.find(r=>r.date===ui.result.date)||null;
   if(ui.result?.mode==='practice')ui.result=state.practiceHistory.find(r=>r.id===ui.result.id&&r.date===ui.result.date)||state.practiceHistory.find(r=>r.date===ui.result.date)||null;
   if(ui.view==='challenge'&&!state.active){const finished=oldActive?.mode==='practice'?state.practiceHistory.find(r=>r.date===oldActive.date):dailyResult();ui.result=finished||null;ui.view=finished?'result':'home';}

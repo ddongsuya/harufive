@@ -75,6 +75,7 @@ test('preview pins exact HTTPS origin before authentication on every route', asy
       const response = await f.call(path, { headers: { Authorization: basic() } }, target);
       assert.equal(response.status, 403); assertSealed(response);
       assert.equal(response.headers.get('WWW-Authenticate'), null);
+      assert.equal(response.headers.get('X-Haru-Application-Status'), null);
     }
   }
   assert.equal(f.assets.length, 0);
@@ -88,6 +89,7 @@ test('every asset, API, private path and method requires authentication first', 
       const response = await f.call(path, { method });
       assert.equal(response.status, 401, `${method} ${path}`); assertSealed(response);
       assert.equal(response.headers.get('WWW-Authenticate'), 'Basic realm="harufive-preview", charset="UTF-8"');
+      assert.equal(response.headers.get('X-Haru-Application-Status'), null);
       if (method === 'HEAD') assert.equal(await response.text(), '');
     }
   }
@@ -104,9 +106,33 @@ test('invalid and ambiguous Basic headers never reach protected code or leak cre
     `Basic ${Buffer.from('harufive:\u0000').toString('base64')}`]) {
     const response = await f.call('/', { headers: { Authorization: authorization } });
     assert.equal(response.status, 401); assertSealed(response);
+    assert.equal(response.headers.get('WWW-Authenticate'), 'Basic realm="harufive-preview", charset="UTF-8"');
+    assert.equal(response.headers.get('X-Haru-Application-Status'), null);
     assert.doesNotMatch(await response.text(), new RegExp(PASSWORD));
   }
   assert.equal(f.assets.length, 0);
+});
+
+test('accepted preview access preserves downstream unauthorized bodies and cookies without a new challenge', async t => {
+  const f = fixture(t, { ASSETS: { fetch() {
+    return Response.json({ code: 'AUTH_REQUIRED', message: 'fixture application login' }, {
+      status: 401, statusText: 'Unauthorized', headers: {
+        'WWW-Authenticate': 'Basic realm="unexpected-downstream"',
+        'Set-Cookie': '__Host-fixture=; Path=/; Max-Age=0; Secure; HttpOnly',
+      },
+    });
+  } } });
+  for (const method of ['GET', 'HEAD']) {
+    const response = await f.call('/', { method, headers: { Authorization: basic() } });
+    assert.equal(response.status, 403);
+    assert.equal(response.statusText, 'Forbidden');
+    assert.equal(response.headers.get('X-Haru-Application-Status'), '401');
+    assert.equal(response.headers.get('WWW-Authenticate'), null);
+    assert.equal(response.headers.get('Cache-Control'), 'private, no-store');
+    assert.deepEqual(response.headers.getSetCookie(), ['__Host-fixture=; Path=/; Max-Age=0; Secure; HttpOnly']);
+    if (method === 'HEAD') assert.equal(await response.text(), '');
+    else assert.deepEqual(await response.json(), { code: 'AUTH_REQUIRED', message: 'fixture application login' });
+  }
 });
 
 test('valid access reuses the public allowlist and removes credentials from asset requests', async t => {

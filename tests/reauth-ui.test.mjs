@@ -6,8 +6,8 @@ import { CATALOG, DEFAULT_EQUIPPED } from '../public/game/state.js';
 
 const NOW = Date.parse('2026-10-20T00:00:00Z'), DAY = '2026-10-20', CONTEXT = 'a'.repeat(64);
 const REAUTH_URL = 'https://kauth.kakao.com/oauth/authorize?response_type=code&state=fixture-state&nonce=fixture-nonce&code_challenge_method=S256&code_challenge=fixture-challenge&max_age=0&prompt=login';
-const snapshot = playerId => ({
-  serverNow: NOW, today: DAY, state: {
+const snapshot = (playerId, today = DAY, serverNow = NOW) => ({
+  serverNow, today, state: {
     playerId, name: playerId === 'player-a' ? '기존 계정 토끼' : '바뀐 계정 토끼', coins: 380,
     owned: CATALOG.filter(item => item.cost === 0).map(item => item.id), equipped: { ...DEFAULT_EQUIPPED },
     results: [], practiceHistory: [], practiceUsage: {}, awards: {}, active: null, createdAt: DAY,
@@ -23,10 +23,10 @@ const sensitive = h => h.calls.filter(call => /^\/api\/privacy\/(?:delete|withdr
 const markup = h => assert.deepEqual(auditMarkup(h.markup()).issues, []);
 
 async function fixture({ enabled = false, fresh = false, hash = '', search = '', startHandler = null, reauthPlayerId = 'player-a' } = {}) {
-  const control = { enabled, fresh, playerId: 'player-a', reauthPlayerId, context: CONTEXT, authenticated: true };
+  const control = { enabled, fresh, playerId: 'player-a', reauthPlayerId, context: CONTEXT, authenticated: true, today: DAY, serverNow: NOW };
   const h = await releaseHarness({
     hash, search,
-    handler: () => control.authenticated ? reply(snapshot(control.playerId)) : reply({ code: 'SIGN_IN_REQUIRED', message: '로그인해 주세요.' }, 401),
+    handler: () => control.authenticated ? reply(snapshot(control.playerId, control.today, control.serverNow)) : reply({ code: 'SIGN_IN_REQUIRED', message: '로그인해 주세요.' }, 401),
     authHandler: call => {
       if (call.url === '/api/auth/status') return reply({
         authenticated: control.authenticated, sites: { enabled: false },
@@ -120,6 +120,48 @@ test('the callback returns to privacy and rechecks permissions before enabling a
       markup(h);
     } finally { h.restore(); }
   }
+});
+
+test('a different device date preserves the initial reauthentication callback view and still checks privacy authority', async () => {
+  const dateDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'Date');
+  const RealDate = globalThis.Date, deviceNow = NOW + 86400000;
+  class DeviceDate extends RealDate {
+    constructor(...args) { super(...(args.length ? args : [deviceNow])); }
+    static now() { return deviceNow; }
+  }
+  Object.defineProperty(globalThis, 'Date', { ...dateDescriptor, value: DeviceDate });
+  try {
+    assert.equal(new Date().toISOString().slice(0, 10), '2026-10-21');
+    for (const fresh of [false, true]) {
+      const { h } = await fixture({ enabled: true, fresh, hash: '#privacy', search: '?auth=reauthenticated' });
+      try {
+        assert.equal(location.hash, '#privacy');
+        assert.equal(location.search, '');
+        assert.deepEqual(h.calls.filter(call => call.url.startsWith('/api/privacy/')).map(call => call.url),
+          fresh ? ['/api/privacy/status', '/api/privacy/children'] : ['/api/privacy/status']);
+        assert.equal(h.app.querySelector('[data-action="privacy-export"]').disabled, !fresh);
+        assert.equal(h.app.querySelector('[data-action="privacy-self-delete"]').disabled, true);
+        assert.equal(sensitive(h).length, 0);
+        assert.equal(h.navigations.length, 0);
+      } finally { h.restore(); }
+    }
+  } finally { Object.defineProperty(globalThis, 'Date', dateDescriptor); }
+});
+
+test('a server day change after an existing snapshot still clears privacy authority and returns home', async () => {
+  const { h, control } = await fixture({ fresh: true });
+  try {
+    await openPrivacy(h);
+    assert.equal(location.hash, '#privacy');
+    assert.equal(h.app.querySelector('[data-action="privacy-export"]').disabled, false);
+    control.today = '2026-10-21';
+    control.serverNow = NOW + 86400000;
+    await h.focus();
+    assert.equal(location.hash, '#home');
+    assert.equal(h.app.querySelector('[data-action="privacy-export"]'), null);
+    assert.equal(sensitive(h).length, 0);
+    assert.equal(h.navigations.length, 0);
+  } finally { h.restore(); }
 });
 
 test('an account-changed reauth start error leaves privacy operations unavailable and never opens a provider', async () => {

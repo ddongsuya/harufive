@@ -1,4 +1,4 @@
-import { GameApiError } from './api.js';
+import { GameApiError, applicationResponseStatus } from './api.js';
 
 export const SOCIAL_PROVIDERS = Object.freeze([
   Object.freeze({id:'kakao',name:'카카오'}),
@@ -111,13 +111,14 @@ export function createAuthApi({fetcher=(...args)=>fetch(...args),timeoutMs=12000
         headers:{Accept:'application/json',...(body?{'Content-Type':'application/json'}:{}),...(context?{'X-Haru-Account':context}:{})},
         ...(body?{body:JSON.stringify(body)}:{}),signal:controller.signal,
       });
+      const status=applicationResponseStatus(response);
       if(destroyed||epoch!==generation||controller.signal.aborted)throw invalidated();
       let payload;try{payload=await response.json();}catch{throw new GameApiError('로그인 응답을 확인하지 못했어요. 다시 시도해 주세요.',{code:'INVALID_AUTH_RESPONSE'});}
       if(destroyed||epoch!==generation||controller.signal.aborted)throw invalidated();
       const retryAfter=Math.max(0,Number(response.headers.get('Retry-After'))||0);
-      if(response.status===429)retryUntil=monotonic()+Math.max(1,retryAfter)*1000;
+      if(status===429)retryUntil=monotonic()+Math.max(1,retryAfter)*1000;
       if(!response.ok)throw new GameApiError(typeof payload?.message==='string'?payload.message:'로그인을 처리하지 못했어요.',{
-        status:response.status,code:payload?.code||'AUTH_FAILED',retryable:response.status>=500||response.status===429,retryAfter,
+        status,code:payload?.code||'AUTH_FAILED',retryable:status>=500||status===429,retryAfter,
       });
       return payload;
     }catch(error){

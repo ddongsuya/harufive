@@ -1,6 +1,8 @@
 # 하루다섯 — Codex 인수인계
 
-**2026-10-21 최신 진행:** 사용자가 Cloudflare `harufive-preview`에 정적 보호 번들을 배포하고 secret을 저장했다. 도구 접근 허용 당시 익명 HTTP 503→401을 확인했으며 이후 사용자 스크린샷으로 비밀번호 입장·하루다섯 화면 렌더링을 확인했다. `harufive-preview-db` 생성도 사용자 보고로 완료됐다. 원격 스키마·DB 바인딩·연결용 코드·소셜 로그인·첫 가입은 아직 미완료다. [최신 검증](docs/codex-verification-2026-10-21.md), [다음 저장소 연결](docs/preview-database-setup.md)을 우선한다. 아래 날짜가 지난 미생성·미배포 설명은 당시 기록이다.
+**2026-10-21 최신 진행:** 사용자가 Cloudflare `harufive-preview-db` 초기화 결과 19개 표·마이그레이션 이력 6개를 알렸고, `DB` 바인딩·연결용 Worker 교체 배포를 완료했다고 보고했다. 일반 Chrome의 `/api/health` 스크린샷에서 `status:ok`, `version:0.5.1`, `database:ready`를 확인했다. Logs OFF와 Google 설정 두 개의 Production·Secret 등록도 사용자 보고로 완료됐다. 다만 `/api/auth/status`의 Google은 여전히 `enabled:false`, `reason:not_configured`이며 원인과 실제 로그인·첫 가입·게임 저장은 미확인이다. 채팅의 `CLENT` 표기는 사용자가 자신의 입력 오타라고 정정했으므로 실제 설정명 오류로 단정하지 않는다. [최신 검증](docs/codex-verification-2026-10-21.md)과 [연결용 시험본](docs/connected-preview.md)을 우선한다. 아래 날짜가 지난 미생성·미배포 설명은 당시 기록이다.
+
+**이번 로컬 수정:** 시험 비밀번호와 앱 세션의 HTTP 401 충돌을 분리하고, 비밀번호 인증 뒤 설정의 분류만 반환하는 `GET /api/preview/config`를 추가했다. 첫 서버 snapshot의 날짜가 기기 날짜와 다를 때 요청한 화면 경로를 지우던 분기도 수정했다. 이 수정의 검증 결과와 원격 반영 여부는 최신 검증 기록으로 구분한다. 새 DB 초기화를 반복하거나 실제 비밀값을 읽어 진단하지 않는다.
 
 작성일: 2026-10-20, 사용자 현지 시간 Asia/Seoul. 사용자가 이 프로젝트를 Codex에서 계속 개발하고 싶다고 요청해 준비한 소스 스냅샷이다. 이 문서와 실제 저장소를 함께 읽고 이어서 작업한다.
 
@@ -330,4 +332,4 @@ Cloudflare의 최초 Hello World 생성은 자동 승인 검토가 거절했다.
 
 19절의 초기 Hello World 자동 승인 거절 이후 사용자가 구체적 초기 생성·보호 코드 교체 과정을 설명받고 남은 작업 진행을 승인했다. 현재 원격 작업의 장애는 별도의 **저장된 브라우저 사이트 접근 거부**다. 사용자가 권한을 허용했다고 알린 뒤 재확인해도 Cloudflare 접근이 거부됐고 카카오 콘솔도 차단됐다. 다른 브라우저·CLI·API로 우회하지 않았다. 원격 Worker·D1은 아직 없으며 카드 등록·유료 전환·배포·PR 병합을 하지 않았다.
 
-다음 담당자는 [개발자 앱 설정](docs/developer-app-setup.md), [연결용 시험본](docs/connected-preview.md), [정책 초안](docs/service-policy-draft.md)과 최신 [검증 기록](docs/codex-verification-2026-10-20.md)을 따른다. 운영 주체에 따른 연령·가입 요건, 첫 가입·본인 권리 행사·보존/백업·광고 및 실제 배포는 미완료다. 외부 연결의 차단을 로컬 개발 완료와 혼동하지 않는다.
+다음 담당자는 [개발자 앱 설정](docs/developer-app-setup.md), [연결용 시험본](docs/connected-preview.md), [정책 초안](docs/service-policy-draft.md)과 최신 [10월 21일 검증 기록](docs/codex-verification-2026-10-21.md)을 따른다. 위 20절의 배포 전 설명은 당시 기록이며 현재 연결용 Worker·DB 준비는 앞머리의 사용자 보고·스크린샷 기준으로 갱신됐다. Google 설정 진단, 운영 주체에 따른 연령·가입 요건, 첫 가입·본인 권리 행사·보존/백업·광고 및 일반 공개는 미완료다. 외부 연결의 차단을 로컬 개발 완료와 혼동하지 않는다.

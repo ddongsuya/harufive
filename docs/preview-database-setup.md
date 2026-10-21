@@ -1,6 +1,6 @@
 # 시험용 D1 저장소 연결
 
-2026-10-21. 사용자는 `harufive-preview-db` 생성을 완료했다고 알렸다. 원격 관리 콘솔은 도구의 사이트 접근 제한 때문에 읽거나 수정하지 않았다. 아래는 새 빈 시험 DB에 사용자가 직접 적용할 절차다.
+2026-10-21 최신 상태: 사용자가 `harufive-preview-db` 초기화 결과 19개 표·마이그레이션 이력 6개, `DB` 바인딩과 연결용 Worker 배포를 완료했다고 알렸다. 일반 Chrome의 `/api/health` 스크린샷에서 `status:ok`, `version:0.5.1`, `database:ready`를 확인했다. **현재 DB의 초기화를 다시 실행하지 않는다.** 원격 관리 콘솔은 도구의 사이트 접근 제한 때문에 읽거나 수정하지 않았다. 아래 절차는 이미 수행한 새 빈 DB 초기화의 재현 안내이며 실제 계정·게임 기록 저장 검증과는 다르다.
 
 ## 준비 파일
 
@@ -37,9 +37,9 @@ Console의 여러 문장 전체를 하나의 원자적 작업으로 가정하지
 
 초기화 확인 뒤 **Workers & Pages → harufive-preview → Settings → Bindings → + Add binding**에서 **D1 database**를 선택한다. 사용자 화면의 실제 위치를 우선하며 새 UI에서는 별도 Bindings 탭일 수 있다. 변수 이름은 **`DB`**, 데이터베이스는 **`harufive-preview-db`**로 지정한다.
 
-현재 배포된 정적 번들은 DB를 전달하지 않는다. 바인딩만 추가해서는 연결 안내가 사라지지 않는다. 검증한 `.local/connected-preview/worker.mjs`를 Edit code에 적용해야 한다. 기존 `HARU_PREVIEW_PASSWORD` secret을 유지한다. 로컬 설정 파일의 0으로 된 DB ID·`remote:false`는 로컬 검사 전용이므로 실제 배포 설정으로 복사하지 않는다.
+정적 번들은 DB를 전달하지 않으므로 바인딩만 추가해서는 연결 안내가 사라지지 않는다. 검증한 `.local/connected-preview/worker.mjs`를 Edit code에 적용하는 단계까지 사용자가 완료했다고 보고했다. 이후 코드 수정은 새 번들의 검증 결과를 확인해 적용하고 기존 `HARU_PREVIEW_PASSWORD` secret과 DB 바인딩을 유지한다. 로컬 설정 파일의 0으로 된 DB ID·`remote:false`는 로컬 검사 전용이므로 실제 배포 설정으로 복사하지 않는다.
 
-JS 코드 붙여넣기는 Wrangler 설정을 적용하지 않는다. 대시보드의 Logs·Preview URLs·CPU 한도·runtime 설정은 별도로 대조해야 한다. 이전 사용자 스크린샷에서 Logs는 켜져 있었으므로 코드의 observability:false와 같다고 주장하지 않는다.
+JS 코드 붙여넣기는 Wrangler 설정을 적용하지 않는다. 대시보드의 Logs·Preview URLs·CPU 한도·runtime 설정은 별도로 대조해야 한다. 이전 스크린샷에서 Logs는 켜져 있었으나, 이후 사용자가 OFF로 변경했다고 보고했다. 나머지 원격 설정까지 로컬 설정과 같다고 주장하지 않는다.
 
 저장소 연결 후에도 실제 제공자 키·콜백 검증과 첫 계정 가입 허가가 남는다. 임의의 회원 데이터를 SQL로 넣어 로그인을 통과시키지 않는다. [연결 시험본](connected-preview.md)을 따른다.
 

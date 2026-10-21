@@ -1,4 +1,5 @@
 import { EXISTING_ACCOUNT_AUTH_KEYS, handleWorkerRequest } from './worker.mjs';
+import { authCredentialState } from './auth-service.mjs';
 
 const USERNAME = 'harufive';
 // Canonical base64url encoding of 32 bytes; the final two padding bits are zero.
@@ -23,14 +24,23 @@ function failure(status, code, challenge = false) {
   });
 }
 
-function seal(response, method) {
+function seal(response, method, { applicationResponse = false } = {}) {
   const headers = new Headers(response.headers);
+  const applicationUnauthorized = applicationResponse && response.status === 401;
+  if (applicationUnauthorized) {
+    // A downstream game/session 401 can invalidate Chromium's cached Basic
+    // credentials even without a challenge. Keep the preview gate's own 401
+    // separate, while preserving the application status for our transports.
+    headers.set('X-Haru-Application-Status', '401');
+    headers.delete('WWW-Authenticate');
+  }
   for (const [name, value] of Object.entries(SECURITY_HEADERS)) headers.set(name, value);
   const vary = (headers.get('Vary') || '').split(',').map(value => value.trim()).filter(Boolean);
   if (!vary.some(value => value.toLowerCase() === 'authorization')) vary.push('Authorization');
   headers.set('Vary', vary.join(', '));
   return new Response(method === 'HEAD' ? null : response.body, {
-    status: response.status, statusText: response.statusText, headers,
+    status: applicationUnauthorized ? 403 : response.status,
+    statusText: applicationUnauthorized ? 'Forbidden' : response.statusText, headers,
   });
 }
 
@@ -89,6 +99,23 @@ export async function handlePreviewWorkerRequest(request, env = {}, { existingAc
     if (!subtle.timingSafeEqual(actual, expected)) {
       return seal(failure(401, 'PREVIEW_AUTH_REQUIRED', true), request.method);
     }
+    if (existingAccountLogin === true && new URL(request.url).pathname === '/api/preview/config') {
+      if (request.method !== 'GET') {
+        return seal(Response.json({ code: 'METHOD_NOT_ALLOWED' }, {
+          status: 405, headers: { Allow: 'GET' },
+        }), request.method);
+      }
+      const providers = {};
+      for (const id of ['google', 'kakao', 'naver']) {
+        const prefix = `HARU_${id.toUpperCase()}`;
+        providers[id] = {
+          clientId: authCredentialState(env[`${prefix}_CLIENT_ID`]),
+          clientSecret: authCredentialState(env[`${prefix}_CLIENT_SECRET`]),
+        };
+      }
+      // A present value has passed syntax checks only, not provider verification.
+      return seal(Response.json({ format: 'harufive-preview-config-v1', providers }), request.method);
+    }
     const headers = new Headers(request.headers);
     headers.delete('Authorization');
     headers.delete('Proxy-Authorization');
@@ -105,7 +132,7 @@ export async function handlePreviewWorkerRequest(request, env = {}, { existingAc
     const response = await handleWorkerRequest(downstream, workerEnv, {
       existingAccountLogin: existingAccountLogin === true,
     });
-    return seal(response, request.method);
+    return seal(response, request.method, { applicationResponse: true });
   } catch { return seal(failure(503, 'PREVIEW_UNAVAILABLE'), request.method); }
 }
 

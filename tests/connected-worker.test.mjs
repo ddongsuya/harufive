@@ -25,6 +25,14 @@ function cookies(response, before = '') {
   }
   return [...jar].map(([name, value]) => `${name}=${value}`).join('; ');
 }
+async function assertApplicationUnauthorized(response, code) {
+  assert.equal(response.status, 403);
+  assert.equal(response.statusText, 'Forbidden');
+  assert.equal(response.headers.get('X-Haru-Application-Status'), '401');
+  assert.equal(response.headers.get('WWW-Authenticate'), null);
+  assert.equal(response.headers.get('Cache-Control'), 'private, no-store');
+  assert.equal((await response.json()).code, code);
+}
 function fixture(t) {
   const db = createSQLiteD1(); t.after(() => db.close());
   const prior = Object.getOwnPropertyDescriptor(crypto.subtle, 'timingSafeEqual');
@@ -118,11 +126,37 @@ test('connected entry checks origin and preview password before reading DB or OA
     Object.defineProperty(f.env, name, { get() { reads++; throw new Error('must remain unread'); } });
   }
   for (const path of ['/', '/api/health', '/api/auth/status', '/api/auth/google/callback?code=x&state=y']) {
-    assert.equal((await f.call(path, { auth: false })).status, 401);
-    assert.equal((await f.call(path, { headers: { Authorization: 'Basic aW52YWxpZA==' } })).status, 401);
-    assert.equal((await f.call(path, { target: 'https://other.example' })).status, 403);
+    for (const options of [{ auth: false }, { headers: { Authorization: 'Basic aW52YWxpZA==' } }]) {
+      const response = await f.call(path, options);
+      assert.equal(response.status, 401);
+      assert.equal(response.headers.get('WWW-Authenticate'), 'Basic realm="harufive-preview", charset="UTF-8"');
+      assert.equal(response.headers.get('X-Haru-Application-Status'), null);
+      assert.equal((await response.json()).code, 'PREVIEW_AUTH_REQUIRED');
+    }
+    const wrongOrigin = await f.call(path, { target: 'https://other.example' });
+    assert.equal(wrongOrigin.status, 403);
+    assert.equal(wrongOrigin.headers.get('X-Haru-Application-Status'), null);
   }
   assert.equal(reads, 0); assert.equal(f.calls.length, 0);
+});
+
+test('game-session failures preserve their meaning without rejecting accepted preview credentials', async t => {
+  const f = fixture(t);
+  for (const [path, options] of [
+    ['/api/game/bootstrap', {}], ['/api/privacy/status', {}],
+    ['/api/auth/google/start', { method: 'POST', body: { intent: 'link' } }],
+  ]) {
+    await assertApplicationUnauthorized(await f.call(path, options), 'SIGN_IN_REQUIRED');
+    const health = await f.call('/api/health');
+    assert.equal(health.status, 200);
+    assert.equal(health.headers.get('X-Haru-Application-Status'), null);
+    assert.equal((await health.json()).database, 'ready');
+  }
+  const status = await f.call('/api/auth/status');
+  assert.equal(status.status, 200);
+  assert.equal(status.headers.get('X-Haru-Application-Status'), null);
+  assert.equal((await status.json()).authenticated, false);
+  assert.equal(f.calls.length, 0);
 });
 
 test('ordinary preview and worker remain closed even when connection flags and credentials are supplied', async t => {
@@ -186,10 +220,10 @@ for (const id of Object.keys(PROVIDERS)) {
     assert.equal(f.db.rows('SELECT * FROM game_players')[0].id, account);
     assert.equal(f.db.rows('SELECT * FROM game_attempts').length, 1);
     assert.equal(f.db.rows('SELECT * FROM auth_sessions').every(row => row.authenticated_at === null), true);
-    assert.equal((await f.call('/api/privacy/status', { cookie: freshLogin.cookie })).status, 401,
-      'Ordinary login without signed auth_time cannot acquire recent rights authority');
+    // Ordinary login without signed auth_time cannot acquire recent rights authority.
+    await assertApplicationUnauthorized(await f.call('/api/privacy/status', { cookie: freshLogin.cookie }), 'REAUTH_REQUIRED');
     assert.equal((await f.call('/api/auth/logout', { method: 'POST', cookie: freshLogin.cookie, body: {} })).status, 200);
-    assert.equal((await f.call('/api/game/bootstrap', { cookie: freshLogin.cookie })).status, 401);
+    await assertApplicationUnauthorized(await f.call('/api/game/bootstrap', { cookie: freshLogin.cookie }), 'SIGN_IN_REQUIRED');
     assert.equal(f.db.rows('SELECT * FROM game_attempts').length, 1, 'Logout does not remove progress');
   });
 }
@@ -233,8 +267,10 @@ test('missing configuration and cross-origin writes cannot initiate provider cal
   for (const id of ['google', 'kakao']) {
     assert.equal((await f.call(`/api/auth/${id}/start`, { method: 'POST', body: { intent: 'login' } })).status, 503);
   }
-  assert.equal((await f.call('/api/auth/naver/start', { method: 'POST', body: { intent: 'login' },
-    headers: { Origin: 'https://other.example' } })).status, 403);
+  const rejectedOrigin = await f.call('/api/auth/naver/start', { method: 'POST', body: { intent: 'login' },
+    headers: { Origin: 'https://other.example' } });
+  assert.equal(rejectedOrigin.status, 403);
+  assert.equal(rejectedOrigin.headers.get('X-Haru-Application-Status'), null);
   assert.equal(f.calls.length, 0); assert.equal(f.db.rows('SELECT * FROM auth_oauth_transactions').length, 0);
   delete f.env.DB;
   assert.equal((await f.call('/api/auth/status')).status, 503);
@@ -266,6 +302,7 @@ test('connected accounts retain privacy authority and cannot write another accou
   const blocked = await f.call('/api/privacy/delete', { method: 'POST', cookie: first.cookie,
     headers, body: { confirmation: 'delete' } });
   assert.equal(blocked.status, 403);
+  assert.equal(blocked.headers.get('X-Haru-Application-Status'), null);
   assert.equal((await blocked.json()).code, 'SELF_CLOSURE_NOT_READY');
   assert.deepEqual(f.db.rows('SELECT * FROM game_players ORDER BY id'), before);
   assert.equal((await f.call('/api/game/bootstrap', { cookie: first.cookie })).status, 200);

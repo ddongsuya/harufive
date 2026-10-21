@@ -117,9 +117,20 @@ function configuredOrigin(env) {
   } catch { return null; }
 }
 
+// Classification only: never return a credential, its length, or its contents.
+// The protected preview diagnostic uses the same acceptance rules as login.
+export function authCredentialState(value) {
+  if (value === undefined || value === null) return 'missing';
+  if (typeof value !== 'string') return 'not_text';
+  if (!value.trim()) return 'empty';
+  if (value.length > 2048) return 'too_long';
+  if (/[\r\n\u0000]/.test(value)) return 'invalid_characters';
+  return 'present';
+}
+
 function credential(env, key) {
   const value = env?.[key];
-  return typeof value === 'string' && value.trim().length > 0 && value.length <= 2048 && !/[\r\n\u0000]/.test(value) ? value : null;
+  return authCredentialState(value) === 'present' ? value : null;
 }
 
 function providerConfig(id, env) {

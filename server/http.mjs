@@ -1,3 +1,4 @@
+import { accountAllowedSql } from './privacy-contract.mjs';
 import { createGameService, GameError } from './game-service.mjs';
 
 export const GAME_VERSION = '0.5.1';
@@ -73,12 +74,14 @@ async function readBody(request, keys) {
 async function rateLimit(db, userId, timestamp, now) {
   const windowStart = Math.floor(timestamp / 60000) * 60000;
   const row = await db.prepare(`INSERT INTO game_rate_limits (user_id, window_start, request_count)
-    VALUES (?, ?, 1)
+    SELECT candidate.id, ?, 1 FROM (SELECT ? AS id) candidate WHERE ${accountAllowedSql('candidate.id')}
     ON CONFLICT(user_id) DO UPDATE SET
       request_count = CASE WHEN excluded.window_start > game_rate_limits.window_start
         THEN 1 ELSE MIN(game_rate_limits.request_count + 1, ?) END,
       window_start = MAX(game_rate_limits.window_start, excluded.window_start)
-    RETURNING request_count, window_start`).bind(userId, windowStart, REQUESTS_PER_MINUTE + 1).first();
+    WHERE ${accountAllowedSql('game_rate_limits.user_id')}
+    RETURNING request_count, window_start`).bind(windowStart, userId, REQUESTS_PER_MINUTE + 1).first();
+  if (!row) throw new GameError(403, 'ACCOUNT_RESTRICTED', '동의 철회 또는 탈퇴 처리 중인 계정이에요.');
   if (!row || row.request_count > REQUESTS_PER_MINUTE) {
     return Math.max(1, Math.ceil(((row?.window_start ?? windowStart) + 60000 - Math.floor(now())) / 1000));
   }
@@ -91,12 +94,12 @@ async function rateLimit(db, userId, timestamp, now) {
  * request field/header never chooses an account. An expected public player ID
  * only detects a stale tab after switching accounts and cannot grant access.
  * @param {Request} request
- * @param {{ action?: string, userId?: string, resolveUserId?: Function, db?: import('@cloudflare/workers-types').D1Database, now?: () => number, makeService?: Function }} [options]
+ * @param {{ action?: string, userId?: string, resolveUserId?: Function, db?: import('@cloudflare/workers-types').D1Database, now?: () => number, makeService?: Function, signInUrl?: string }} [options]
  */
-export async function handleGameRequest(request, { action, userId, resolveUserId, db, now = Date.now, makeService = createGameService } = {}) {
+export async function handleGameRequest(request, { action, userId, resolveUserId, db, now = Date.now, makeService = createGameService, signInUrl = '/signin-with-chatgpt?return_to=%2F' } = {}) {
   const validIdentity = id => typeof id === 'string' && !!id.trim() && id.length <= 200;
   const signInRequired = () => rejected(401, 'SIGN_IN_REQUIRED', '로그인하고 나만의 기록을 이어가세요.', {
-      signInUrl: '/signin-with-chatgpt?return_to=%2F',
+      signInUrl,
     });
   if (!validIdentity(userId) && typeof resolveUserId !== 'function') {
     return signInRequired();
@@ -159,9 +162,10 @@ export async function handleHealthRequest(db) {
     const row = await db.prepare(`SELECT COUNT(*) AS count FROM sqlite_schema
       WHERE type = 'table' AND name IN ('game_players', 'game_attempts', 'game_results',
       'game_mutation_receipts', 'game_coin_ledger', 'game_closed_weeks', 'game_weekly_awards', 'game_rate_limits',
-      'auth_accounts', 'auth_identities', 'auth_sessions', 'auth_oauth_transactions', 'auth_rate_limits')`).first();
-    if (row?.count !== 13) throw new Error('schema_unavailable');
-    await db.prepare(`SELECT t.claim_token, s.binding_hash FROM auth_oauth_transactions t
+      'auth_accounts', 'auth_identities', 'auth_sessions', 'auth_oauth_transactions', 'auth_rate_limits',
+      'privacy_account_controls', 'privacy_deletion_jobs', 'guardian_requests', 'guardian_consents', 'guardian_links')`).first();
+    if (row?.count !== 18) throw new Error('schema_unavailable');
+    await db.prepare(`SELECT t.claim_token, t.session_hash, t.identity_id, s.binding_hash, s.authenticated_at FROM auth_oauth_transactions t
       LEFT JOIN auth_sessions s ON s.binding_hash = t.binding_hash LIMIT 0`).all();
     return json({ status: 'ok', version: GAME_VERSION, database: 'ready' });
   } catch {

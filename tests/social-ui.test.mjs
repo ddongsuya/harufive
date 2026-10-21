@@ -12,7 +12,7 @@ const snapshot=()=>({serverNow:NOW,today:DAY,state:{
   totals:{dailyCount:0,questionCount:0,correctCount:0,practiceCount:0},ranking:{week:'2026-10-19',rows:[],me:null,rank:null,total:0,participated:false,correct:0,score:0,totalTimeMs:null},
 }});
 function authStatus({authenticated=true,enabled=false,linked=[]}={}){
-  return {authenticated,account:authenticated?{provider:'chatgpt',linkedProviders:linked}:null,
+  return {authenticated,sites:{enabled:true},account:authenticated?{provider:'chatgpt',linkedProviders:linked}:null,
     providers:['kakao','google','naver'].map(id=>({id,enabled,reason:enabled?'ready':'not_configured'})),registration:{open:false}};
 }
 const anonymous=()=>reply({code:'SIGN_IN_REQUIRED',message:'로그인해 주세요.'},401);
@@ -28,7 +28,7 @@ await test('social account UI uses server availability and explicit account-link
       }
       assert.match(h.app.innerHTML,/카카오/);assert.match(h.app.innerHTML,/Google/);assert.match(h.app.innerHTML,/네이버/);
       assert.equal(h.calls.filter(call=>call.body).length,0);assert.equal(h.navigations.length,0);assert.equal(h.writes.length,0);
-      await h.click('release-info');assert.match(h.modal.innerHTML,/전체이용가를 목표/);assert.match(h.modal.innerHTML,/등급이 확정되었다는 뜻은 아니/);
+      await h.click('release-info');assert.match(h.modal.innerHTML,/만 14세 이상 이용자/);assert.match(h.modal.innerHTML,/연령 확인 절차를 준비하고 있어요/);assert.match(h.modal.innerHTML,/게임물 등급은 아직 확정되지 않았어요/);
       await h.click('close-modal',{},true);assert.equal(h.modal.open,false);
       assert.deepEqual(auditMarkup(h.markup()).issues,[]);
     }finally{h.restore();}
@@ -121,4 +121,18 @@ test('client accepts no account identifiers, extra providers or arbitrary naviga
   assert.equal(status.providers.length,3);assert.doesNotMatch(JSON.stringify(status),/private-id|private@|client_secret|invented/);
   for(const url of ['javascript:alert(1)','https://accounts.google.com.attacker.example/o/oauth2/v2/auth','https://accounts.google.com/o/oauth2/v2/auth?response_type=token','https://accounts.google.com:444/o/oauth2/v2/auth',googleURL+'#secret'])assert.throws(()=>validateLoginDestination(url,'google'));
   assert.throws(()=>validateLoginDestination('//attacker.example','chatgpt'));
+});
+
+test('standalone and unknown auth capabilities hide the Sites sign-in path', async () => {
+  for (const sites of [{ enabled: false }, undefined]) {
+    const h = await releaseHarness({ handler: anonymous,
+      authHandler: () => reply({ ...authStatus({ authenticated: false }), sites }),
+    });
+    try {
+      assert.doesNotMatch(h.app.innerHTML, /data-action="auth-sites"|signin-with-chatgpt/);
+      assert.match(h.app.innerHTML, /카카오/);
+      assert.equal(h.navigations.length, 0);
+      assert.deepEqual(auditMarkup(h.markup()).issues, []);
+    } finally { h.restore(); }
+  }
 });

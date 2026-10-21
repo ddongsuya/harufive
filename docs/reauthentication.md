@@ -1,0 +1,82 @@
+# 활성 기존 계정의 최근 본인 확인
+
+2026-10-20, Asia/Seoul. 이 문서는 현재 코드의 계약과 미검증 범위를 설명한다. **활성 기존 계정의 최근 본인 확인을 준비한 단계이며 실제 제공자 재인증이나 가입을 개통한 단계가 아니다.** 최근 본인 확인은 가입 연령·성인 여부를 확인하는 기능이 아니다. 현재 가입·이용은 [만 14세 이상](age-eligibility.md)이고 신규 아동·보호자 연결은 제외한다. 기존 가족의 권리 행사와 과거 증빙 계약은 [운영 설명](privacy-operations.md)에 보존한다.
+
+## 1. 적용 범위와 공개 상태
+
+- 기존 자체 세션과 이미 연결된 소셜 신원을 가진 활성 계정만 재인증할 수 있다. 계정·소셜 연결·게임 프로필을 새로 생성하지 않는다.
+- 신뢰된 서버 옵션 `reauthEnabled`의 기본값은 false다. 독립 서버는 `sitesEnabled:false`, `loginEnabled:false`, `reauthEnabled:false`를 명시한다. 키나 브라우저 입력만으로 열리지 않는다.
+- `HARU_REGISTRATION_OPEN=false`, `guardianReady:false`, `enrollmentOpen:false`, `guardianEnrollment:false`를 유지한다.
+- Google 강제 재인증은 공식 지원 범위에 맞춰 서버 상태·시작·콜백과 클라이언트에서 차단한다. 일반 Google 로그인·계정 연결 코어는 유지한다.
+- 본인 탈퇴·삭제 UI와 HTTP는 `selfClosure:false`, 폐쇄 계정 본인의 후속 권리 경로는 `selfRecoveryReady:false`다. 이번 재인증은 두 기능을 활성화하지 않는다.
+
+## 2. 최근 인증 시각과 기존 DB 업그레이드
+
+`drizzle/0005_recent_reauthentication.sql`은 `auth_sessions.authenticated_at`과 재인증 흐름의 원래 세션·신원 연결 필드를 추가한다. 기존 세션은 보존하되 `authenticated_at`은 **NULL**로 옮긴다. 기존 계정의 생성 시각이나 최근 세션 발급 시각으로 채우지 않는다.
+
+`authenticated_at`은 서명을 검증한 ID 토큰의 `auth_time`(초)을 밀리초로 변환한 값이다. 안전한 정수·미래 시각 여부·토큰 발급 시각과의 관계를 검사한다. 세션 `created_at`, 토큰 `iat`, 서버 현재 시각을 대체 값으로 쓰지 않는다. 일반 로그인 토큰에 `auth_time`이 없으면 NULL로 저장한다.
+
+정보 관리 HTTP는 확인 시각으로부터 15분 미만인 경우만 허용한다. NULL·과거 기한 초과·미래 값은 `401 REAUTH_REQUIRED`다. 유효한 일반 게임 세션이 남아 있어도 정보 관리 권한을 얻지는 못한다. 최종 조회·쓰기 SQL도 `authenticated_at`과 DB 현재 시각으로 같은 조건을 재검사하므로 처리 대기 중 만료·로그아웃을 통과시킬 수 없다. 초 단위 SQL 기한은 최대 999ms 일찍 닫힐 수 있다.
+
+## 3. 상태 조회와 시작 계약
+
+GET `/api/auth/status`는 기존 로그인 상태에 다음 객체를 추가한다. 오래된/NULL 확인 시각의 유효 세션도 이 상태를 조회해 재인증 가능 여부를 확인할 수 있다.
+
+```text
+reauthentication: {
+  enabled: boolean,
+  accountContext: string | null,
+  playerId: string | null,
+  providers: [{ id, name, enabled, reason }]
+}
+```
+
+`accountContext`는 현재 자체 세션에서 만든 64자리 불투명 문맥이고 `playerId`는 게임의 공개 ID 또는 null이다. 내부 계정 ID·제공자 주체·토큰·세션 해시는 반환하지 않는다. 제공자는 기존 연결과 서버 설정을 모두 만족해야 허용되며 `reauthentication_not_ready`, `sign_in_required`, `not_linked` 등의 비활성 이유를 반환한다. 서버 옵션이 닫혀 있으면 유효 문맥이 있어도 `enabled:false`다.
+
+준비된 카카오·네이버 경로의 POST `/api/auth/{kakao|naver}/start`에 `{ "intent": "reauth" }`와 상태 조회의 `X-Haru-Account`를 전달한다. 동일 출처·JSON·자체 세션·계정 문맥을 검사한 뒤 원래 계정, 세션 해시, 기존 소셜 신원 행을 흐름에 고정한다. Sites 인증만 있거나 다른 계정·연결되지 않은 제공자이면 시작하지 못한다.
+
+콜백은 `/api/auth/{provider}/callback`이다. state·브라우저 바인딩·PKCE·nonce와 고정 issuer/audience·서명을 검사한다. 재인증은 `auth_time`이 반드시 있어야 하며 흐름 시작보다 오래된 확인은 거절한다(초 정밀도와 30초 허용 범위 적용). URL의 재인증 요청 매개변수나 새 토큰의 `iat`만으로 성공 처리하지 않는다.
+
+## 4. 세션 회전과 취소
+
+서명 확인 후 최종 DB 배치에서 원래 계정·세션·소셜 신원 행과 provider/issuer/audience/subject가 그대로인지 확인한다. 계정 차단, 세션 철회·만료, 흐름 만료, 토큰 만료, 최근 확인 기한도 DB 시각으로 다시 검사한다. 토큰 교환 중 로그아웃·철회·계정 전환이 있으면 새 권한을 발급하지 않는다.
+
+승인된 새 세션을 삽입한 배치 안에서 원래 세션을 폐기하고 해당 흐름을 제거한다. 배치 완료 조건이 맞지 않으면 전체를 되돌린다. 로그아웃은 응답 전 발급된 새 세션도 흐름 바인딩으로 취소하고, 철회는 계정과 관련 진행 흐름을 함께 닫는다. 늦은 쿠키 응답이 이미 취소된 권한을 되살리지 않는다.
+
+성공 응답은 `303 /?auth=reauthenticated#privacy`다. 이 URL 표시는 화면 복귀용이며 권한 증거가 아니다.
+
+## 5. 제공자별 준비 계약과 미검증 범위
+
+Context7을 먼저 확인한 뒤 2026-10-20 공식 원문과 대조했다. 이전 Google `max_age=0` 요청과 시험 토큰으로 통과한 결과는 실제 Google 재인증 지원을 증명하지 않는다.
+
+| 제공자 | 현재 처리와 남은 확인 |
+|---|---|
+| Google | 공식 문서는 Google Account 재인증 요청 미지원을 명시. 상태는 `enabled:false`, `reason:unsupported_by_provider`. 새 시작과 이전 Google 재인증 콜백도 토큰 교환 전에 차단. 일반 로그인·계정 연결 코어 유지 |
+| 카카오 | 준비 요청은 `max_age=0`, `prompt=login`. 공식 문서에 `auth_time`이 있으나 실제 앱 왕복·갱신은 미검증. `prompt=login`은 카카오톡 인앱 브라우저 미지원 |
+| 네이버 | 준비 요청은 `max_age=0`, `auth_type=reauthenticate`. 공식 OIDC·재인증 안내와 별개로 실제 서명된 `auth_time` 발행·갱신은 미확정 |
+
+Google의 추가 `auth_time` 반환은 앱 게시·검증, Session age claims 설정과 `claims` 요청이 필요하다. 이 시각은 Google 계정의 마지막 인증 시각이며 새 앱 로그인 시각이 아니다. 이번에는 추가 claims 요청이나 설정을 활성화하지 않는다. 별도의 최근 본인 확인 방법은 미결정이고 필요한 시각이 없거나 오래되면 민감한 권한을 계속 거부한다. [Google 공식 안내](https://developers.google.com/identity/siwg/security-bundle)
+
+카카오·네이버도 실제 지원을 확인하기 전에는 독립 서버의 `reauthEnabled:false`를 유지한다. `max_age`나 재인증 화면·새 토큰 `iat`만으로 성공을 인정하지 않는다. [카카오 REST](https://developers.kakao.com/docs/ko/kakaologin/rest-api), [네이버 가이드](https://developers.naver.com/docs/login/devguide/devguide.md)
+
+`npm run auth:check`는 설정의 존재·형식과 미준비 항목만 검사한다. 실제 인증 시각이나 제공자 지원·가입·배포를 검증하지 않으며 전체 출시 준비는 false다. [인증 연결 점검](auth-connection-checklist.md)을 따른다.
+
+## 6. 화면의 권한 다시 확인
+
+정보 관리 화면은 현재 게임의 공개 `playerId`와 서버 상태가 일치할 때만 재인증 선택을 표시한다. 시작 직전 새 인증 상태를 조회해 원래 계정·세션 문맥·연결된 제공자가 같은지 확인하고, 외부 이동 직전에도 화면과 요청이 여전히 유효한지 검사한다.
+
+콜백 뒤에는 인증·게임·정보 관리 상태를 다시 조회한다. URL 성공 표시나 이전 화면의 허용 상태로 내보내기·아동 관리를 열지 않는다. 탭 숨김·화면 이동·로그아웃·계정 변경으로 취소된 요청의 늦은 응답은 버린다.
+
+재인증 전에 선택했던 철회·삭제를 자동 실행하지 않는다. 사용자가 현재 대상을 다시 확인해야 한다. 변경 응답이 불확실하면 자동 재전송하지 않고 현재 상태를 다시 확인한다. 실제 제공자가 닫힌 로컬 안내에서는 준비 상태만 표시하며 가짜 성공·테스트 로그인으로 대신하지 않는다.
+
+## 7. 폐쇄 계정의 권리 행사는 별도 미완료
+
+신뢰된 내부 철회·삭제 코어는 계정과 기존 세션을 닫는다. 후속 권리 경로가 없는 본인 요청은 현재 HTTP에서 `403 SELF_CLOSURE_NOT_READY`로 막고 UI도 비활성으로 유지한다. 현재 인증 조회와 재인증 시작은 활성 계정만 허용하므로, 이번 흐름으로 폐쇄 계정에 일반 게임 세션을 다시 발급하거나 본인 후속 권리를 제공할 수 없다. 연결된 보호자의 철회 아동 관리 권한은 기존 계약대로 유지한다.
+
+실제 삭제는 소셜 신원과 인증 계정도 제거한다. 이후 같은 제공자로 로그인한다고 삭제된 계정을 찾아낼 수 있는 구조가 아니다. 향후에는 별도 본인 확인·권리 전용 세션·최소 완료 증거와 보존 정책을 함께 설계해야 한다. 현재 삭제 접수의 요청자 해시는 사용자 인증 수단이 아니며, 이를 이유로 원문 소셜 식별자를 추가 보관하지 않는다.
+
+## 8. 검증 증거
+
+서버 검증은 `tests/auth-server.test.mjs`, `privacy-http.test.mjs`, `account-lifecycle.test.mjs`, `guardian-service.test.mjs`, 마이그레이션 검증은 `tests/local-environment.test.mjs`를 따른다. 클라이언트·화면 및 실제 서버와 세 제공자 클라이언트 계약의 통합 검증은 테스트 자료와 격리된 DB로 수행했다.
+
+이 단계에서 전체 342개 테스트, 구문·타입 검사, 기존 5단계 빌드가 통과했다. 실행 조건과 세부 결과는 [Codex 검증 기록](codex-verification-2026-10-20.md)을 따른다. 로그인 후 UI 검사는 테스트 자료 기반이며 실제 제공자 브라우저 왕복·실기기·운영 DB·배포 성공을 뜻하지 않는다.

@@ -294,3 +294,18 @@ test('health checks all migrated tables and exposes no player details', async t 
   db.sqlite.exec('DROP TABLE game_rate_limits');
   assert.equal((await handleHealthRequest(db)).status, 503);
 });
+
+
+test('health rejects databases missing any recent-authentication proof column', async t => {
+  for (const [table, column] of [
+    ['auth_sessions', 'authenticated_at'],
+    ['auth_oauth_transactions', 'session_hash'],
+    ['auth_oauth_transactions', 'identity_id'],
+  ]) {
+    const db = createSQLiteD1(); t.after(() => db.close());
+    db.sqlite.exec(`ALTER TABLE ${table} RENAME COLUMN ${column} TO missing_proof_column`);
+    const response = await handleHealthRequest(db);
+    assert.equal(response.status, 503, column);
+    assert.deepEqual(await response.json(), { status: 'unavailable', version: '0.5.1', database: 'unavailable' });
+  }
+});

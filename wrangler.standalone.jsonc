@@ -1,0 +1,27 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "haru-five-standalone-local",
+  "main": "server/worker.mjs",
+  "compatibility_date": "2026-05-15",
+  "workers_dev": false,
+  "preview_urls": false,
+  "limits": { "cpu_ms": 10 },
+  "observability": { "enabled": false },
+  "build": { "command": "node scripts/standalone-build-gate.mjs" },
+  "assets": {
+    "directory": "./.local/standalone-worker/public",
+    "binding": "ASSETS",
+    "run_worker_first": true,
+    "html_handling": "none",
+    "not_found_handling": "none"
+  },
+  "d1_databases": [{
+    "binding": "DB",
+    "database_name": "haru-five-standalone-local",
+    "database_id": "00000000-0000-0000-0000-000000000000",
+    "migrations_dir": "drizzle",
+    "remote": false
+  }],
+  "vars": { "HARU_REGISTRATION_OPEN": "false" },
+  "dev": { "ip": "127.0.0.1", "port": 8787, "local_protocol": "http" }
+}

@@ -1,0 +1,73 @@
+name: Deploy blog to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NEXT_PUBLIC_SITE_URL: https://harufive.kr
+  NEXT_PUBLIC_ADSENSE_CLIENT: ${{ vars.NEXT_PUBLIC_ADSENSE_CLIENT }}
+  NEXT_PUBLIC_ADSENSE_SLOT_ARTICLE: ${{ vars.NEXT_PUBLIC_ADSENSE_SLOT_ARTICLE }}
+  NEXT_PUBLIC_ADSENSE_SLOT_SIDEBAR: ${{ vars.NEXT_PUBLIC_ADSENSE_SLOT_SIDEBAR }}
+  CONTACT_TO: limjm900202@gmail.com
+
+jobs:
+  build:
+    name: Build (typecheck + static export)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build static site
+        run: npm run build
+
+      - name: Prepare artifact
+        run: |
+          touch out/.nojekyll
+          ls -la out | head -30
+
+      - name: Upload Pages artifact
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: out
+
+  deploy:
+    name: Deploy
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

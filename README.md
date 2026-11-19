@@ -71,10 +71,17 @@ featured: false
 
 ## 배포 (GitHub Pages)
 
-`.github/workflows/deploy.yml` 이 두 가지를 수행합니다.
+빌드 결과물 `out/` 을 GitHub Pages 로 배포하는 워크플로우는
+[`docs/github-pages-deploy.yml`](docs/github-pages-deploy.yml) 에 있습니다.
+**저장소에 `.github/workflows/deploy.yml` 로 한 번 옮겨 두면** 이후부터는
+main push 때 자동 배포됩니다.
 
 - **PR**: `npm ci` → `typecheck` → `build` 검증만 (배포 없음)
 - **main push**: `out/` 을 GitHub Pages 아티팩트로 업로드 후 배포
+
+> 이 브랜치에는 Pickle 의 GitHub 연결 권한(workflows) 제약으로 워크플로우 파일을
+> 직접 커밋하지 못했습니다. GitHub 웹에서 **Add file → Create new file** 로
+> `.github/workflows/deploy.yml` 을 만들고 아래 파일 내용을 그대로 붙여 넣으면 됩니다.
 
 최초 1회 저장소 설정이 필요합니다.
 

@@ -1,31 +1,134 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
+import { SiteHeader } from "@/components/site-header";
+import { SiteFooter } from "@/components/site-footer";
+import { JsonLd } from "@/components/json-ld";
+import { site } from "@/lib/site";
 
 export const metadata: Metadata = {
-  title: "하루다섯 — 매일 쌓이는 작은 성취",
-  description: "매일 다섯 문제로 쌓는 나만의 기록. 여섯 분야의 퍼즐, 주간 등급, 귀여운 도트 캐릭터 꾸미기를 만나보세요.",
-  icons: {
-    icon: "/game/favicon.svg",
-    shortcut: "/game/favicon.svg",
+  metadataBase: new URL(site.url),
+  title: {
+    default: site.title,
+    template: `%s | ${site.name}`,
   },
+  description: site.description,
+  applicationName: site.name,
+  authors: [{ name: site.author.name, url: site.url }],
+  creator: site.author.name,
+  publisher: site.name,
+  keywords: [
+    "AI 툴",
+    "AI 자동화",
+    "생산성",
+    "프롬프트",
+    "ChatGPT",
+    "Claude",
+    "노코드 자동화",
+    "업무 자동화",
+    "하루다섯",
+  ],
+  alternates: {
+    canonical: "/",
+    types: {
+      "application/rss+xml": [{ url: "/feed.xml", title: `${site.name} RSS` }],
+    },
+  },
+  openGraph: {
+    type: "website",
+    locale: site.locale,
+    url: site.url,
+    siteName: site.name,
+    title: site.title,
+    description: site.description,
+    images: [
+      {
+        url: site.ogImage,
+        width: 1200,
+        height: 630,
+        alt: site.title,
+      },
+    ],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: site.title,
+    description: site.description,
+    images: [site.ogImage],
+  },
+  robots: {
+    index: true,
+    follow: true,
+    googleBot: {
+      index: true,
+      follow: true,
+      "max-image-preview": "large",
+      "max-snippet": -1,
+      "max-video-preview": -1,
+    },
+  },
+  category: "technology",
+  ...(site.adsense.client
+    ? { other: { "google-adsense-account": site.adsense.client } }
+    : {}),
 };
 
 export const viewport: Viewport = {
+  themeColor: "#0f6b5c",
   width: "device-width",
   initialScale: 1,
-  viewportFit: "cover",
-  themeColor: "#7860b5",
 };
 
 export default function RootLayout({
   children,
-}: Readonly<{
-  children: React.ReactNode;
-}>) {
+}: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="ko">
-      <head><link rel="stylesheet" href="/game/styles.css?v=0.5.1" /></head>
-      <body>{children}</body>
+      <body className="flex min-h-screen flex-col">
+        <a
+          href="#main"
+          className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50 focus:rounded-md focus:bg-brand focus:px-4 focus:py-2 focus:text-sm focus:font-medium focus:text-white"
+        >
+          본문으로 건너뛰기
+        </a>
+        <SiteHeader />
+        <main id="main" className="flex-1">
+          {children}
+        </main>
+        <SiteFooter />
+
+        <JsonLd
+          data={[
+            {
+              "@context": "https://schema.org",
+              "@type": "WebSite",
+              "@id": `${site.url}/#website`,
+              url: site.url,
+              name: site.name,
+              description: site.description,
+              inLanguage: "ko-KR",
+              publisher: { "@id": `${site.url}/#person` },
+            },
+            {
+              "@context": "https://schema.org",
+              "@type": "Person",
+              "@id": `${site.url}/#person`,
+              name: site.author.name,
+              url: `${site.url}/about/`,
+              email: site.contactEmail,
+              description: site.author.bio,
+              knowsAbout: ["AI 도구", "업무 자동화", "생산성", "프롬프트 엔지니어링"],
+            },
+          ]}
+        />
+
+        {site.adsense.client ? (
+          <script
+            async
+            src={`https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=${site.adsense.client}`}
+            crossOrigin="anonymous"
+          />
+        ) : null}
+      </body>
     </html>
   );
 }

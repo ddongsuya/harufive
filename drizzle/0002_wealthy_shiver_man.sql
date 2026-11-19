@@ -1,1 +1,0 @@
-ALTER TABLE `auth_oauth_transactions` ADD `claim_token` text;

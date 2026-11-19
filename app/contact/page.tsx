@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { DocPage } from "@/components/doc-page";
 import { site } from "@/lib/site";
 
 export const metadata: Metadata = {
@@ -25,62 +26,50 @@ const topics = [
 
 export default function ContactPage() {
   return (
-    <div className="mx-auto w-full max-w-3xl px-5 py-14 sm:px-6">
-      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-brand">
-        Contact
-      </p>
-      <h1 className="mt-3 text-3xl font-bold tracking-tight text-ink">
-        문의하기
-      </h1>
-      <p className="mt-3 text-[15px] leading-relaxed text-ink-soft">
-        블로그에 관한 문의는 아래 메일로 보내 주세요. 영업일 기준 2~3일 안에
-        답장 드립니다.
-      </p>
-
-      <div className="mt-8 rounded-2xl border border-line bg-paper-alt/60 p-6">
-        <p className="text-xs font-semibold uppercase tracking-wider text-ink-mute">
-          이메일
-        </p>
+    <DocPage
+      eyebrow="문의"
+      title="문의하기"
+      lead="블로그에 관한 문의는 아래 메일로 보내 주세요. 영업일 기준 2~3일 안에 답장 드립니다."
+    >
+      <div className="rounded-xl border border-rule bg-surface p-6">
+        <p className="label-mono text-ink-mute">이메일</p>
         <a
           href={`mailto:${site.contactEmail}?subject=${encodeURIComponent(
             "[하루다섯] 문의",
           )}`}
-          className="mt-2 inline-block text-xl font-semibold text-brand-dark underline decoration-brand/30 underline-offset-4 hover:decoration-brand"
+          className="mt-2 inline-block text-[1.3rem] font-bold tracking-tight text-ink underline decoration-signal/40 underline-offset-4 transition-colors hover:decoration-signal"
         >
           {site.contactEmail}
         </a>
-        <p className="mt-4 text-sm text-ink-soft">
+        <p className="mt-4 text-[13px] text-ink-soft">
           메일에 아래 내용을 함께 적어 주시면 더 빠르게 확인할 수 있습니다.
         </p>
-        <ul className="mt-2 space-y-1 text-sm text-ink-soft">
-          <li>· 문의 종류(정정 / 주제 제안 / 협업 / 기타)</li>
-          <li>· 관련 글 주소(있는 경우)</li>
-          <li>· 확인이 필요한 근거 자료(있는 경우)</li>
+        <ul className="mt-2 list-disc space-y-1 pl-5 text-[13px] text-ink-soft">
+          <li>문의 종류(정정 / 주제 제안 / 협업 / 기타)</li>
+          <li>관련 글 주소(있는 경우)</li>
+          <li>확인이 필요한 근거 자료(있는 경우)</li>
         </ul>
       </div>
 
-      <div className="mt-8 grid gap-4">
+      <div className="mt-8 grid gap-px bg-rule">
         {topics.map((topic) => (
-          <div
-            key={topic.title}
-            className="rounded-xl border border-line p-5"
-          >
-            <h2 className="text-base font-semibold text-ink">{topic.title}</h2>
-            <p className="mt-2 text-sm leading-relaxed text-ink-soft">
+          <div key={topic.title} className="bg-canvas py-5">
+            <h2 className="text-[14.5px] font-bold tracking-tight text-ink">{topic.title}</h2>
+            <p className="mt-1.5 text-[13px] leading-[1.75] text-ink-soft">
               {topic.body}
             </p>
           </div>
         ))}
       </div>
 
-      <p className="mt-8 text-xs leading-relaxed text-ink-mute">
+      <p className="mt-8 text-[12px] leading-relaxed text-ink-mute">
         개인정보 처리에 관한 문의는{" "}
-        <a href="/privacy/" className="underline">
+        <a href="/privacy/" className="underline decoration-rule underline-offset-2 hover:text-ink">
           개인정보처리방침
         </a>
         을 먼저 확인해 주세요. 블로그는 회원가입·로그인 기능이 없으며, 문의
         과정에서 받은 정보는 응대 목적으로만 사용합니다.
       </p>
-    </div>
+    </DocPage>
   );
 }

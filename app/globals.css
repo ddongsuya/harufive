@@ -1,22 +1,40 @@
 @import "tailwindcss";
 @plugin "@tailwindcss/typography";
 
+/*
+  하루다섯 디자인 토큰 — "작업대 위의 다섯 칸"
+  청자 사기빛 바탕 · 먹빛 글자 · 쪽빛 구조 · 주홍 신호.
+  카테고리 색은 장식이 아니라 정보(어느 칸의 글인지)를 나른다.
+*/
 @theme {
-  --color-paper: #fdfcf8;
-  --color-paper-alt: #f5f2ea;
-  --color-ink: #15181d;
-  --color-ink-soft: #4b5260;
-  --color-ink-mute: #767d8a;
-  --color-line: #e4dfd4;
-  --color-brand: #0f6b5c;
-  --color-brand-dark: #0a4d42;
-  --color-brand-soft: #e6f1ee;
-  --color-accent: #b4622f;
+  --color-canvas: #eceee7;
+  --color-surface: #f8f8f3;
+  --color-sunk: #e3e5dc;
+  --color-ink: #101413;
+  --color-ink-soft: #39423f;
+  --color-ink-mute: #5b6562;
+  --color-rule: #cdd2c7;
+  --color-deep: #0e1b2c;
+  --color-deep-2: #17293f;
+  --color-signal: #b8351b;
+  --color-signal-soft: #f0e2dd;
+  --color-indigo: #1f2f63;
+  --color-jade: #1b5c4e;
+  --color-clay: #8a4b23;
+  --color-plum: #5c2b4a;
+
   --font-sans:
-    "Pretendard", -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo",
-    "Malgun Gothic", "Segoe UI", system-ui, sans-serif;
+    "Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont,
+    "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", "Segoe UI",
+    system-ui, sans-serif;
+  --font-display:
+    var(--font-space-grotesk), "Space Grotesk", "Pretendard Variable",
+    Pretendard, sans-serif;
   --font-mono:
-    ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    var(--font-jetbrains-mono), "JetBrains Mono", ui-monospace, SFMono-Regular,
+    Menlo, monospace;
+
+  --radius-tile: 0.875rem;
 }
 
 @layer base {
@@ -26,43 +44,138 @@
   }
 
   body {
-    background-color: var(--color-paper);
+    background-color: var(--color-canvas);
     color: var(--color-ink);
     font-family: var(--font-sans);
+    font-feature-settings: "ss01" 1;
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
+    word-break: keep-all;
+    overflow-wrap: anywhere;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    font-weight: 700;
+    letter-spacing: -0.025em;
+    text-wrap: balance;
   }
 
   ::selection {
-    background-color: var(--color-brand-soft);
-    color: var(--color-brand-dark);
+    background-color: #101413;
+    color: #f8f8f3;
   }
 
   :focus-visible {
-    outline: 2px solid var(--color-brand);
+    outline: 2px solid var(--color-signal);
     outline-offset: 2px;
-    border-radius: 2px;
+    border-radius: 4px;
+  }
+
+  /* 머리말 고정 높이만큼 앵커 위치를 띄운다. */
+  :target {
+    scroll-margin-top: 6.5rem;
   }
 }
 
-/* 본문 타이포그래피: 한국어 가독성에 맞춰 줄간격과 자간을 조정한다. */
+@layer components {
+  /* 1px 실선으로 이어 붙인 벤토 판. 칸 사이 간격이 곧 선이 된다. */
+  .bento {
+    display: grid;
+    gap: 1px;
+    background-color: var(--color-rule);
+    border: 1px solid var(--color-rule);
+    border-radius: var(--radius-tile);
+    overflow: hidden;
+  }
+
+  .tile {
+    position: relative;
+    background-color: var(--color-surface);
+    padding: 1.5rem;
+    min-width: 0;
+  }
+
+  @media (min-width: 640px) {
+    .tile {
+      padding: 1.75rem;
+    }
+  }
+
+  .tile-deep {
+    background-color: var(--color-deep);
+    color: var(--color-surface);
+  }
+
+  /* 눈금이 살짝 보이는 작업대 바탕 — 대표 칸 뒤에만 쓴다. */
+  .bench-grid {
+    background-image:
+      linear-gradient(to right, rgba(248, 248, 243, 0.045) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(248, 248, 243, 0.045) 1px, transparent 1px);
+    background-size: 40px 40px;
+  }
+
+  .label-mono {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    line-height: 1.4;
+  }
+
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    border-radius: 999px;
+    border: 1px solid var(--color-rule);
+    background-color: transparent;
+    padding: 0.4rem 0.75rem;
+    font-size: 0.8125rem;
+    font-weight: 500;
+    color: var(--color-ink-soft);
+    white-space: nowrap;
+    transition:
+      background-color 160ms ease,
+      border-color 160ms ease,
+      color 160ms ease;
+  }
+
+  .chip:hover {
+    border-color: var(--color-ink);
+    color: var(--color-ink);
+  }
+
+  .chip[data-active="true"] {
+    background-color: var(--color-ink);
+    border-color: var(--color-ink);
+    color: var(--color-surface);
+  }
+
+  .chip:focus-visible {
+    outline-offset: 2px;
+  }
+}
+
+/* ── 본문 타이포그래피 ─────────────────────────────────────────── */
 .article-prose {
-  --tw-prose-body: #2c313a;
+  --tw-prose-body: #2b3330;
   --tw-prose-headings: var(--color-ink);
   --tw-prose-lead: var(--color-ink-soft);
-  --tw-prose-links: var(--color-brand-dark);
+  --tw-prose-links: var(--color-signal);
   --tw-prose-bold: var(--color-ink);
-  --tw-prose-counters: var(--color-brand);
-  --tw-prose-bullets: #c4bdae;
-  --tw-prose-hr: var(--color-line);
+  --tw-prose-counters: var(--color-signal);
+  --tw-prose-bullets: #b3b9ae;
+  --tw-prose-hr: var(--color-rule);
   --tw-prose-quotes: var(--color-ink-soft);
-  --tw-prose-quote-borders: var(--color-brand);
+  --tw-prose-quote-borders: var(--color-ink);
   --tw-prose-captions: var(--color-ink-mute);
-  --tw-prose-code: #8a3a1c;
-  --tw-prose-pre-code: #f4f1ea;
-  --tw-prose-pre-bg: #1c2128;
-  --tw-prose-th-borders: #d7d1c4;
-  --tw-prose-td-borders: var(--color-line);
+  --tw-prose-code: #8f2c17;
+  --tw-prose-pre-code: #e9ece4;
+  --tw-prose-pre-bg: var(--color-deep);
+  --tw-prose-th-borders: #bcc2b7;
+  --tw-prose-td-borders: var(--color-rule);
   font-size: 1.0625rem;
   line-height: 1.85;
   letter-spacing: -0.003em;
@@ -71,52 +184,59 @@
 }
 
 .article-prose :where(h2) {
-  margin-top: 2.6em;
+  margin-top: 2.7em;
   margin-bottom: 0.9em;
-  padding-top: 0.2em;
-  font-size: 1.5rem;
-  line-height: 1.4;
-  letter-spacing: -0.02em;
-  scroll-margin-top: 6rem;
+  font-size: 1.4375rem;
+  line-height: 1.45;
+  letter-spacing: -0.03em;
+  scroll-margin-top: 6.5rem;
 }
 
 .article-prose :where(h3) {
   margin-top: 2em;
-  margin-bottom: 0.7em;
-  font-size: 1.175rem;
-  line-height: 1.5;
-  letter-spacing: -0.015em;
-  scroll-margin-top: 6rem;
+  margin-bottom: 0.65em;
+  font-size: 1.125rem;
+  line-height: 1.55;
+  letter-spacing: -0.02em;
+  scroll-margin-top: 6.5rem;
 }
 
 .article-prose :where(h2)::before {
   content: "";
   display: block;
-  width: 2rem;
-  height: 3px;
-  margin-bottom: 0.9rem;
-  border-radius: 2px;
-  background-color: var(--color-brand);
+  width: 1.5rem;
+  height: 2px;
+  margin-bottom: 0.85rem;
+  background-color: var(--color-signal);
 }
 
 .article-prose :where(a) {
   text-decoration-line: underline;
   text-decoration-thickness: 1px;
   text-underline-offset: 3px;
-  text-decoration-color: #b7cfc8;
+  text-decoration-color: color-mix(in srgb, var(--color-signal) 35%, transparent);
 }
 
 .article-prose :where(a:hover) {
-  text-decoration-color: var(--color-brand);
+  text-decoration-color: var(--color-signal);
+}
+
+.article-prose :where(strong) {
+  font-weight: 700;
 }
 
 .article-prose :where(table) {
-  font-size: 0.95rem;
-  line-height: 1.6;
+  font-size: 0.9375rem;
+  line-height: 1.65;
+  word-break: keep-all;
+}
+
+.article-prose :where(td) {
+  overflow-wrap: normal;
 }
 
 .article-prose :where(thead th) {
-  background-color: var(--color-paper-alt);
+  background-color: var(--color-sunk);
   font-weight: 600;
   white-space: nowrap;
 }
@@ -127,17 +247,23 @@
 
 .article-prose :where(blockquote) {
   font-style: normal;
-  border-left-width: 3px;
-  background-color: var(--color-paper-alt);
-  padding: 0.9rem 1.1rem;
-  border-radius: 0 0.5rem 0.5rem 0;
+  border-left-width: 2px;
+  border-left-color: var(--color-ink);
+  background-color: transparent;
+  padding: 0.15rem 0 0.15rem 1.15rem;
+  color: var(--color-ink-soft);
+}
+
+.article-prose :where(blockquote p:first-of-type)::before,
+.article-prose :where(blockquote p:last-of-type)::after {
+  content: "";
 }
 
 .article-prose :where(code):not(pre code) {
-  background-color: #f1ece1;
-  border-radius: 0.3rem;
-  padding: 0.15em 0.35em;
-  font-size: 0.9em;
+  background-color: var(--color-sunk);
+  border-radius: 0.25rem;
+  padding: 0.12em 0.35em;
+  font-size: 0.875em;
   font-weight: 500;
 }
 
@@ -147,13 +273,27 @@
 }
 
 .article-prose :where(pre) {
-  border-radius: 0.75rem;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  border-radius: 0;
   font-size: 0.875rem;
   line-height: 1.7;
 }
 
+.article-prose :where(pre code) {
+  background: transparent;
+  padding: 0;
+  font-size: inherit;
+}
+
 .article-prose :where(ul > li)::marker {
-  color: var(--color-brand);
+  color: var(--color-signal);
+}
+
+.article-prose :where(input[type="checkbox"]) {
+  accent-color: var(--color-signal);
+  margin-right: 0.4rem;
 }
 
 /* rehype-autolink-headings 로 감싼 제목 링크는 본문 링크처럼 보이지 않게 한다. */
@@ -163,10 +303,28 @@
 }
 
 .article-prose :where(h2, h3) a:hover {
-  color: var(--color-brand-dark);
+  color: var(--color-signal);
+}
+
+.article-prose :where(img) {
+  border-radius: 0.75rem;
 }
 
 /* 광고 슬롯이 비어 있을 때 생기는 빈 공간 방지 */
 .ad-slot:empty {
   display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
 }

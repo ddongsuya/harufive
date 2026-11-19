@@ -1,10 +1,12 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { ArrowRight } from "lucide-react";
 import { JsonLd } from "@/components/json-ld";
-import { PostCard } from "@/components/post-card";
-import { categories, getCategory, site } from "@/lib/site";
-import { absoluteUrl, categoryPath, getPostsByCategory } from "@/lib/posts";
+import { PostTile } from "@/components/post-tile";
+import { categories, categoryTone, getCategory, site } from "@/lib/site";
+import { toneStyles } from "@/components/tone";
+import { absoluteUrl, categoryPath, getPostsByCategory, toSummary } from "@/lib/posts";
 
 type Params = { category: string };
 
@@ -44,48 +46,92 @@ export default async function CategoryPage({
   const category = getCategory(slug);
   if (!category) notFound();
 
-  const posts = getPostsByCategory(category.slug);
+  const posts = getPostsByCategory(category.slug).map(toSummary);
+  const catTone = toneStyles[categoryTone(category.slug)];
 
   return (
-    <div className="mx-auto w-full max-w-3xl px-5 py-14 sm:px-6">
-      <nav aria-label="위치" className="text-xs text-ink-mute">
-        <ol className="flex items-center gap-1.5">
+    <div className="mx-auto w-full max-w-[1180px] px-5 sm:px-8">
+      <nav aria-label="위치" className="pt-8">
+        <ol className="label-mono flex items-center gap-2 text-ink-mute">
           <li>
-            <Link href="/" className="hover:text-brand-dark">
+            <Link href="/" className="transition-colors hover:text-ink">
               홈
             </Link>
           </li>
           <li aria-hidden="true">/</li>
-          <li>카테고리</li>
+          <li>
+            <Link href="/posts/" className="transition-colors hover:text-ink">
+              카테고리
+            </Link>
+          </li>
           <li aria-hidden="true">/</li>
           <li className="text-ink-soft">{category.name}</li>
         </ol>
       </nav>
 
-      <header className="mt-6">
-        <h1 className="text-3xl font-bold tracking-tight text-ink">
-          {category.name}
-        </h1>
-        <p className="mt-3 text-[15px] leading-relaxed text-ink-soft">
-          {category.description}
-        </p>
-        <p className="mt-2 text-xs text-ink-mute">총 {posts.length}편</p>
+      <header className={`mt-6 border-t-2 pt-6 ${catTone.border}`}>
+        <div className="flex flex-wrap items-end justify-between gap-5">
+          <div>
+            <p className={`inline-flex items-center gap-2 text-[12px] font-semibold ${catTone.text}`}>
+              <span aria-hidden="true" className={`h-1.5 w-1.5 rounded-full ${catTone.solid}`} />
+              카테고리
+            </p>
+            <h1 className="mt-2.5 text-[clamp(1.8rem,3.4vw,2.6rem)] font-bold leading-[1.2] tracking-[-0.04em] text-ink">
+              {category.name}
+            </h1>
+            <p className="mt-3 max-w-xl text-[13.5px] leading-[1.75] text-ink-soft">
+              {category.description}
+            </p>
+          </div>
+          <p className="label-mono pb-1 text-ink-mute">{posts.length}편</p>
+        </div>
       </header>
 
-      <div className="mt-10 grid gap-4">
-        {posts.map((post) => (
-          <PostCard key={post.slug} post={post} />
-        ))}
-      </div>
-
-      {posts.length === 0 ? (
-        <p className="mt-10 rounded-xl border border-line bg-paper-alt p-6 text-sm text-ink-soft">
-          이 카테고리에 아직 글이 없습니다.{" "}
-          <Link href="/posts/" className="underline">
+      {posts.length > 0 ? (
+        <div
+          className={`bento mt-8 grid-cols-1 ${
+            posts.length >= 3
+              ? "sm:grid-cols-2 lg:grid-cols-3"
+              : posts.length === 2
+                ? "sm:grid-cols-2"
+                : ""
+          }`}
+        >
+          {posts.map((post, index) => (
+            <PostTile key={post.slug} post={post} lead={index === 0} />
+          ))}
+        </div>
+      ) : (
+        <div className="mt-8 rounded-xl border border-rule bg-surface p-8">
+          <p className="text-[15px] font-semibold text-ink">이 칸에는 아직 글이 없습니다</p>
+          <p className="mt-2 text-[13px] text-ink-soft">전체 목록에서 다른 주제를 골라 보세요.</p>
+          <Link
+            href="/posts/"
+            className="mt-5 inline-flex items-center gap-1.5 text-[13px] font-semibold text-ink"
+          >
             전체 글 보기
+            <ArrowRight className="h-3.5 w-3.5" strokeWidth={2} />
           </Link>
-        </p>
-      ) : null}
+        </div>
+      )}
+
+      <div className="mt-12 flex flex-wrap gap-2 border-t border-rule pt-6">
+        {categories
+          .filter((item) => item.slug !== category.slug)
+          .map((item) => (
+            <Link
+              key={item.slug}
+              href={categoryPath(item.slug)}
+              className="inline-flex items-center gap-1.5 rounded-full border border-rule px-3 py-1.5 text-[12px] text-ink-soft transition-colors hover:border-ink hover:text-ink"
+            >
+              <span
+                aria-hidden="true"
+                className={`h-1.5 w-1.5 rounded-full ${toneStyles[categoryTone(item.slug)].solid}`}
+              />
+              {item.name}
+            </Link>
+          ))}
+      </div>
 
       <JsonLd
         data={{

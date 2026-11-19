@@ -4,6 +4,7 @@ import remarkGfm from "remark-gfm";
 import rehypeSlug from "rehype-slug";
 import rehypeAutolinkHeadings from "rehype-autolink-headings";
 import { Callout } from "./callout";
+import { CodeBlock } from "./code-block";
 
 function MdxLink({ href = "", children, ...rest }: AnchorHTMLAttributes<HTMLAnchorElement>) {
   const isExternal = /^https?:\/\//.test(href);
@@ -25,8 +26,13 @@ function MdxLink({ href = "", children, ...rest }: AnchorHTMLAttributes<HTMLAnch
 
 function MdxTable(props: ComponentPropsWithoutRef<"table">) {
   return (
-    <div className="my-6 overflow-x-auto rounded-lg border border-line">
-      <table className="my-0 w-full border-collapse" {...props} />
+    <div className="my-6">
+      <div className="overflow-x-auto rounded-lg border border-rule">
+        <table className="my-0 w-full min-w-[30rem] border-collapse" {...props} />
+      </div>
+      <p className="mt-2 text-[11px] text-ink-mute sm:hidden">
+        표가 넓어 옆으로 넘겨 볼 수 있습니다.
+      </p>
     </div>
   );
 }
@@ -39,7 +45,7 @@ function MdxImage(props: ComponentPropsWithoutRef<"img">) {
       alt={alt}
       loading="lazy"
       decoding="async"
-      className="rounded-xl border border-line"
+      className="rounded-xl border border-rule"
       {...rest}
     />
   );
@@ -49,6 +55,7 @@ const components = {
   a: MdxLink,
   table: MdxTable,
   img: MdxImage,
+  pre: CodeBlock,
   Callout,
 };
 

@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { DocPage } from "@/components/doc-page";
 import { site } from "@/lib/site";
 
 export const metadata: Metadata = {
@@ -13,16 +14,8 @@ const updated = "2026년 11월 19일";
 
 export default function TermsPage() {
   return (
-    <div className="mx-auto w-full max-w-3xl px-5 py-14 sm:px-6">
-      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-brand">
-        Terms
-      </p>
-      <h1 className="mt-3 text-3xl font-bold tracking-tight text-ink">
-        이용약관
-      </h1>
-      <p className="mt-3 text-sm text-ink-mute">시행일 {updated}</p>
-
-      <div className="article-prose prose mt-8 max-w-none">
+    <DocPage eyebrow="약관" title="이용약관" meta={<>시행일 {updated}</>}>
+      <div className="article-prose prose max-w-none">
         <h2>1. 목적</h2>
         <p>
           이 약관은 {site.name}({site.url}, 이하 &ldquo;블로그&rdquo;)가 제공하는
@@ -93,6 +86,6 @@ export default function TermsPage() {
           주세요.
         </p>
       </div>
-    </div>
+    </DocPage>
   );
 }

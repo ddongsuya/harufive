@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { DocPage } from "@/components/doc-page";
 import { site } from "@/lib/site";
 
 export const metadata: Metadata = {
@@ -13,18 +14,16 @@ const updated = "2026년 11월 19일";
 
 export default function PrivacyPage() {
   return (
-    <div className="mx-auto w-full max-w-3xl px-5 py-14 sm:px-6">
-      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-brand">
-        Privacy
-      </p>
-      <h1 className="mt-3 text-3xl font-bold tracking-tight text-ink">
-        개인정보처리방침
-      </h1>
-      <p className="mt-3 text-sm text-ink-mute">
-        시행일 {updated} · 운영자 {site.author.name}
-      </p>
-
-      <div className="article-prose prose mt-8 max-w-none">
+    <DocPage
+      eyebrow="개인정보"
+      title="개인정보처리방침"
+      meta={
+        <>
+          시행일 {updated} · 운영자 {site.author.name}
+        </>
+      }
+    >
+      <div className="article-prose prose max-w-none">
         <p>
           {site.name}(이하 &ldquo;블로그&rdquo;, {site.url})는 이용자의 개인정보를
           소중히 다루며, 「개인정보 보호법」 등 관련 법령을 준수합니다. 이
@@ -185,10 +184,16 @@ export default function PrivacyPage() {
         </p>
       </div>
 
-      <p className="mt-10 text-sm text-ink-soft">
-        함께 보기: <Link href="/terms/" className="underline">이용약관</Link> ·{" "}
-        <Link href="/contact/" className="underline">문의하기</Link>
+      <p className="mt-10 text-[13px] text-ink-soft">
+        함께 보기:{" "}
+        <Link href="/terms/" className="underline decoration-rule underline-offset-2 hover:text-ink">
+          이용약관
+        </Link>{" "}
+        ·{" "}
+        <Link href="/contact/" className="underline decoration-rule underline-offset-2 hover:text-ink">
+          문의하기
+        </Link>
       </p>
-    </div>
+    </DocPage>
   );
 }

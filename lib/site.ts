@@ -31,10 +31,14 @@ export const site = {
   gaId: process.env.NEXT_PUBLIC_GA_ID ?? "",
 } as const;
 
+export type CategoryTone = "indigo" | "signal" | "jade" | "clay";
+
 export type Category = {
   slug: string;
   name: string;
   description: string;
+  /** 칸의 성격을 색으로 나른다. 값은 components 의 tone 맵과 짝을 이룬다. */
+  tone: CategoryTone;
 };
 
 /** 카테고리는 이 목록만 쓴다. 글 frontmatter 의 category 값과 slug 가 일치해야 한다. */
@@ -44,29 +48,37 @@ export const categories: Category[] = [
     name: "AI 기초",
     description:
       "챗봇과 AI 에이전트가 어떻게 다르고, 무엇을 맡길 수 있는지 정리한 글.",
+    tone: "indigo",
   },
   {
     slug: "prompting",
     name: "프롬프트",
     description:
       "ChatGPT·Claude 같은 도구에서 원하는 결과를 안정적으로 얻는 지시문 설계법.",
+    tone: "signal",
   },
   {
     slug: "automation",
     name: "업무 자동화",
     description:
       "반복 업무를 찾아 없애는 순서, 노코드 도구로 만드는 실제 자동화 흐름.",
+    tone: "jade",
   },
   {
     slug: "tools",
     name: "툴 활용",
     description:
       "무료로 시작할 수 있는 AI 생산성 도구 조합과 각 도구의 실무 쓰임.",
+    tone: "clay",
   },
 ];
 
 export function getCategory(slug: string): Category | undefined {
   return categories.find((category) => category.slug === slug);
+}
+
+export function categoryTone(slug: string): CategoryTone {
+  return getCategory(slug)?.tone ?? "indigo";
 }
 
 export function categoryName(slug: string): string {

@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { DocPage } from "@/components/doc-page";
 import { categories, site } from "@/lib/site";
 
 export const metadata: Metadata = {
@@ -11,15 +12,11 @@ export const metadata: Metadata = {
 
 export default function AboutPage() {
   return (
-    <div className="mx-auto w-full max-w-3xl px-5 py-14 sm:px-6">
-      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-brand">
-        About
-      </p>
-      <h1 className="mt-3 text-3xl font-bold tracking-tight text-ink">
-        하루다섯은 어떤 블로그인가
-      </h1>
-
-      <div className="article-prose prose mt-8 max-w-none">
+    <DocPage
+      eyebrow="소개"
+      title="하루다섯은 어떤 블로그인가"
+    >
+      <div className="article-prose prose max-w-none">
         <p>
           <strong>하루다섯(harufive.kr)</strong>은 AI 도구와 자동화로 하루의
           반복 업무를 다섯 번, 다섯 분씩이라도 줄이는 방법을 정리하는
@@ -102,17 +99,17 @@ export default function AboutPage() {
       <div className="mt-10 flex flex-wrap gap-3">
         <Link
           href="/posts/"
-          className="rounded-lg bg-brand px-5 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-brand-dark"
+          className="rounded-full bg-ink px-5 py-2.5 text-[13px] font-semibold text-surface transition-colors hover:bg-ink/90"
         >
           글 전체 보기
         </Link>
         <Link
           href="/contact/"
-          className="rounded-lg border border-line px-5 py-2.5 text-sm font-semibold text-ink-soft transition-colors hover:border-brand hover:text-brand-dark"
+          className="rounded-full border border-rule px-5 py-2.5 text-[13px] font-semibold text-ink-soft transition-colors hover:border-ink hover:text-ink"
         >
           문의하기
         </Link>
       </div>
-    </div>
+    </DocPage>
   );
 }

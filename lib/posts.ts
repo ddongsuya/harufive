@@ -3,6 +3,7 @@ import path from "node:path";
 import matter from "gray-matter";
 import GithubSlugger from "github-slugger";
 import { site } from "./site";
+import { tagSlug } from "./urls";
 
 const POSTS_DIR = path.join(process.cwd(), "content", "posts");
 
@@ -30,6 +31,35 @@ export type Post = PostMeta & {
   readingMinutes: number;
   characterCount: number;
 };
+
+/** 화면(클라이언트 컴포넌트)에 건네는 요약본. 본문·목차는 담지 않는다. */
+export type PostSummary = {
+  slug: string;
+  title: string;
+  description: string;
+  date: string;
+  updated?: string;
+  category: string;
+  tags: string[];
+  author: string;
+  featured: boolean;
+  readingMinutes: number;
+};
+
+export function toSummary(post: Post): PostSummary {
+  return {
+    slug: post.slug,
+    title: post.title,
+    description: post.description,
+    date: post.date,
+    updated: post.updated,
+    category: post.category,
+    tags: post.tags,
+    author: post.author,
+    featured: post.featured,
+    readingMinutes: post.readingMinutes,
+  };
+}
 
 type Frontmatter = {
   title?: string;
@@ -170,15 +200,6 @@ export function getPostsByTag(tag: string): Post[] {
   return getAllPosts().filter((post) => post.tags.includes(tag));
 }
 
-/** 태그를 URL 에 쓸 수 있는 형태로 바꾼다. (공백·기호 → 하이픈) */
-export function tagSlug(name: string): string {
-  return name
-    .trim()
-    .toLowerCase()
-    .replace(/[^\p{L}\p{N}]+/gu, "-")
-    .replace(/^-+|-+$/g, "");
-}
-
 export type TagInfo = { name: string; slug: string; count: number };
 
 export function getAllTags(): TagInfo[] {
@@ -220,25 +241,11 @@ export function getAdjacentPosts(post: Post): {
   };
 }
 
-export function formatDate(iso: string): string {
-  if (!iso) return "";
-  const [year, month, day] = iso.split("-");
-  return `${year}년 ${Number(month)}월 ${Number(day)}일`;
-}
-
-/** RSS·사이트맵에서 쓰는 절대 URL */
-export function absoluteUrl(pathname: string): string {
-  return `${site.url}${pathname.startsWith("/") ? pathname : `/${pathname}`}`;
-}
-
-export function postPath(slug: string): string {
-  return `/posts/${slug}/`;
-}
-
-export function categoryPath(slug: string): string {
-  return `/categories/${slug}/`;
-}
-
-export function tagPath(tag: string): string {
-  return `/tags/${encodeURIComponent(tagSlug(tag))}/`;
-}
+export {
+  absoluteUrl,
+  categoryPath,
+  formatDate,
+  postPath,
+  tagPath,
+  tagSlug,
+} from "./urls";

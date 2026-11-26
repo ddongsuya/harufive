@@ -8,6 +8,7 @@ import { ArrowUpRight, Menu, Rss, X } from "lucide-react";
 import { categories, categoryTone, site } from "@/lib/site";
 import { categoryPath } from "@/lib/urls";
 import { toneStyles } from "./tone";
+import { VisitorStats } from "./visitor-stats";
 
 const navItems = [
   { href: "/posts/", label: "가이드", match: ["/posts", "/categories", "/tags"] },
@@ -68,53 +69,61 @@ export function SiteHeader() {
             </span>
           </Link>
 
-          <nav aria-label="주요 메뉴" className="hidden items-center gap-7 sm:flex">
-            {navItems.map((item) => {
-              const active = isActive(item.match);
-              return (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  aria-current={active ? "page" : undefined}
-                  className={[
-                    "group/nav relative py-1 text-[12.5px] tracking-[0.01em] transition-colors",
-                    active
-                      ? "font-semibold text-ink"
-                      : "font-medium text-ink-mute hover:text-ink",
-                  ].join(" ")}
-                >
-                  {item.label}
-                  <span
-                    aria-hidden="true"
+          <div className="flex items-center gap-5 sm:gap-6">
+            <nav aria-label="주요 메뉴" className="hidden items-center gap-7 sm:flex">
+              {navItems.map((item) => {
+                const active = isActive(item.match);
+                return (
+                  <Link
+                    key={item.href}
+                    href={item.href}
+                    aria-current={active ? "page" : undefined}
                     className={[
-                      "absolute inset-x-0 -bottom-px h-px origin-left bg-ink transition-transform duration-300",
+                      "group/nav relative py-1 text-[12.5px] tracking-[0.01em] transition-colors",
                       active
-                        ? "scale-x-100"
-                        : "scale-x-0 group-hover/nav:scale-x-100",
+                        ? "font-semibold text-ink"
+                        : "font-medium text-ink-mute hover:text-ink",
                     ].join(" ")}
-                  />
-                </Link>
-              );
-            })}
+                  >
+                    {item.label}
+                    <span
+                      aria-hidden="true"
+                      className={[
+                        "absolute inset-x-0 -bottom-px h-px origin-left bg-ink transition-transform duration-300",
+                        active
+                          ? "scale-x-100"
+                          : "scale-x-0 group-hover/nav:scale-x-100",
+                      ].join(" ")}
+                    />
+                  </Link>
+                );
+              })}
 
-            <a
-              href="/feed.xml"
-              className="ml-1 inline-flex h-8 w-8 items-center justify-center rounded-full border border-rule text-ink-soft transition-colors hover:border-ink hover:text-ink"
-              aria-label="RSS 피드"
+              <a
+                href="/feed.xml"
+                className="ml-1 inline-flex h-8 w-8 items-center justify-center rounded-full border border-rule text-ink-soft transition-colors hover:border-ink hover:text-ink"
+                aria-label="RSS 피드"
+              >
+                <Rss className="h-3.5 w-3.5" strokeWidth={1.7} />
+              </a>
+            </nav>
+
+            <span
+              aria-hidden="true"
+              className="hidden h-3.5 w-px bg-rule lg:block"
+            />
+            <VisitorStats className="hidden lg:flex" />
+
+            <button
+              type="button"
+              onClick={() => setOpen(true)}
+              className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-rule text-ink sm:hidden"
+              aria-label="메뉴 열기"
+              aria-expanded={open}
             >
-              <Rss className="h-3.5 w-3.5" strokeWidth={1.7} />
-            </a>
-          </nav>
-
-          <button
-            type="button"
-            onClick={() => setOpen(true)}
-            className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-rule text-ink sm:hidden"
-            aria-label="메뉴 열기"
-            aria-expanded={open}
-          >
-            <Menu className="h-5 w-5" strokeWidth={1.7} />
-          </button>
+              <Menu className="h-5 w-5" strokeWidth={1.7} />
+            </button>
+          </div>
         </div>
       </header>
 
@@ -188,9 +197,13 @@ export function SiteHeader() {
                 ))}
               </ul>
 
+              <div className="mt-8 flex items-baseline gap-4 border-t border-rule pt-5">
+                <VisitorStats />
+              </div>
+
               <a
                 href="/feed.xml"
-                className="mt-8 inline-flex items-center gap-2 border-b border-ink pb-1 font-mono text-[10.5px] uppercase tracking-[0.08em] text-ink"
+                className="mt-5 inline-flex items-center gap-2 border-b border-ink pb-1 font-mono text-[10.5px] uppercase tracking-[0.08em] text-ink"
               >
                 <Rss className="h-3.5 w-3.5" strokeWidth={1.7} />
                 RSS

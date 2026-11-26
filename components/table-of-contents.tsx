@@ -5,8 +5,11 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { ChevronDown } from "lucide-react";
 import type { TocItem } from "@/lib/posts";
 
+const pad = (value: number) => String(value).padStart(2, "0");
+
 /**
  * 목차. 읽는 위치에 따라 지금 보고 있는 절을 표시한다.
+ * 항목마다 번호를 붙여 본문 인덱스와 같은 리듬을 준다.
  * 좁은 화면에서는 접었다 펼 수 있는 상자로 바뀐다.
  */
 export function TableOfContents({
@@ -56,31 +59,43 @@ export function TableOfContents({
   if (items.length < 2) return null;
 
   const list = (
-    <ol className="relative mt-3">
-      <span aria-hidden="true" className="absolute inset-y-0 left-0 w-px bg-rule" />
-      {items.map((item) => {
+    <ol className="mt-3">
+      {items.map((item, index) => {
         const isActive = active === item.id;
         return (
-          <li key={item.id} className={item.level === 3 ? "pl-7" : "pl-4"}>
+          <li key={item.id}>
             <a
               href={`#${item.id}`}
               aria-current={isActive ? "true" : undefined}
               onClick={() => setOpen(false)}
               className={[
-                "relative block py-1.5 pr-2 text-[12.5px] leading-[1.5] transition-colors duration-200",
-                isActive ? "font-semibold text-ink" : "text-ink-mute hover:text-ink-soft",
+                "relative flex gap-2 py-1.5 pr-2 text-[12px] leading-[1.55] transition-colors duration-200",
+                item.level === 3 ? "pl-10" : "pl-5",
+                isActive ? "text-ink" : "text-ink-mute hover:text-ink-soft",
               ].join(" ")}
             >
+              <span
+                aria-hidden="true"
+                className="absolute inset-y-0 left-0 w-px bg-rule"
+              />
               {isActive ? (
                 <motion.span
                   layoutId={variant === "sidebar" ? "toc-marker" : "toc-marker-inline"}
-                  className="absolute -left-px top-0 h-full w-[2px] bg-signal"
+                  className="absolute inset-y-0 left-0 w-px bg-signal"
                   transition={
-                    reduce ? { duration: 0 } : { type: "spring", stiffness: 520, damping: 42 }
+                    reduce
+                      ? { duration: 0 }
+                      : { type: "spring", stiffness: 520, damping: 42 }
                   }
                 />
               ) : null}
-              {item.text}
+              <span
+                aria-hidden="true"
+                className="shrink-0 font-mono text-[9px] leading-[1.9] tabular-nums tracking-[0.04em] text-ink-mute/70"
+              >
+                {pad(index + 1)}
+              </span>
+              <span className={isActive ? "font-medium" : ""}>{item.text}</span>
             </a>
           </li>
         );
@@ -90,22 +105,22 @@ export function TableOfContents({
 
   if (variant === "inline") {
     return (
-      <div className="rounded-xl border border-rule bg-surface">
+      <div className="border border-rule bg-surface">
         <button
           type="button"
           onClick={() => setOpen((value) => !value)}
           aria-expanded={open}
           className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left"
         >
-          <span className="flex items-baseline gap-2">
-            <span className="label-mono text-ink-mute">목차</span>
-            <span className="truncate text-[13px] font-semibold text-ink">
+          <span className="flex min-w-0 items-baseline gap-2.5">
+            <span className="label-mono shrink-0 text-ink-mute">목차</span>
+            <span className="truncate text-[12.5px] font-medium text-ink">
               {items.find((item) => item.id === active)?.text ?? items[0].text}
             </span>
           </span>
           <ChevronDown
             className={`h-4 w-4 shrink-0 text-ink-mute transition-transform duration-300 ${open ? "rotate-180" : ""}`}
-            strokeWidth={2}
+            strokeWidth={1.8}
           />
         </button>
 
@@ -119,7 +134,7 @@ export function TableOfContents({
               transition={{ duration: reduce ? 0 : 0.24, ease: [0.22, 1, 0.36, 1] }}
               className="overflow-hidden"
             >
-              <div className="border-t border-rule/70 px-4 pb-3">{list}</div>
+              <div className="border-t border-rule px-4 pb-3">{list}</div>
             </motion.div>
           ) : null}
         </AnimatePresence>

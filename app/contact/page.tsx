@@ -31,33 +31,43 @@ export default function ContactPage() {
       title="문의하기"
       lead="블로그에 관한 문의는 아래 메일로 보내 주세요. 영업일 기준 2~3일 안에 답장 드립니다."
     >
-      <div className="rounded-xl border border-rule bg-surface p-6">
+      <div className="border border-rule bg-surface p-6">
         <p className="label-mono text-ink-mute">이메일</p>
         <a
           href={`mailto:${site.contactEmail}?subject=${encodeURIComponent(
             "[하루다섯] 문의",
           )}`}
-          className="mt-2 inline-block text-[1.3rem] font-bold tracking-tight text-ink underline decoration-signal/40 underline-offset-4 transition-colors hover:decoration-signal"
+          className="mt-2 inline-block font-editorial text-[1.35rem] font-semibold tracking-[-0.02em] text-ink underline decoration-signal/40 underline-offset-4 transition-colors hover:decoration-signal"
         >
           {site.contactEmail}
         </a>
-        <p className="mt-4 text-[13px] text-ink-soft">
+        <p className="mt-4 text-[13px] leading-[1.8] text-ink-soft">
           메일에 아래 내용을 함께 적어 주시면 더 빠르게 확인할 수 있습니다.
         </p>
-        <ul className="mt-2 list-disc space-y-1 pl-5 text-[13px] text-ink-soft">
+        <ul className="mt-2 list-disc space-y-1 pl-5 text-[13px] leading-[1.8] text-ink-soft">
           <li>문의 종류(정정 / 주제 제안 / 협업 / 기타)</li>
           <li>관련 글 주소(있는 경우)</li>
           <li>확인이 필요한 근거 자료(있는 경우)</li>
         </ul>
       </div>
 
-      <div className="mt-8 grid gap-px bg-rule">
-        {topics.map((topic) => (
-          <div key={topic.title} className="bg-canvas py-5">
-            <h2 className="text-[14.5px] font-bold tracking-tight text-ink">{topic.title}</h2>
-            <p className="mt-1.5 text-[13px] leading-[1.75] text-ink-soft">
-              {topic.body}
-            </p>
+      <div className="mt-10 border-t border-rule">
+        {topics.map((topic, index) => (
+          <div
+            key={topic.title}
+            className="flex gap-4 border-b border-rule py-5 sm:gap-6"
+          >
+            <span className="shrink-0 pt-0.5 font-mono text-[9.5px] tabular-nums tracking-[0.1em] text-signal">
+              {String(index + 1).padStart(2, "0")}
+            </span>
+            <div>
+              <h2 className="font-editorial text-[1.02rem] font-semibold tracking-[-0.01em] text-ink">
+                {topic.title}
+              </h2>
+              <p className="mt-1.5 text-[13px] leading-[1.85] text-ink-soft">
+                {topic.body}
+              </p>
+            </div>
           </div>
         ))}
       </div>

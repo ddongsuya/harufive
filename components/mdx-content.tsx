@@ -26,11 +26,11 @@ function MdxLink({ href = "", children, ...rest }: AnchorHTMLAttributes<HTMLAnch
 
 function MdxTable(props: ComponentPropsWithoutRef<"table">) {
   return (
-    <div className="my-6">
-      <div className="overflow-x-auto rounded-lg border border-rule">
+    <div className="my-7">
+      <div className="overflow-x-auto">
         <table className="my-0 w-full min-w-[30rem] border-collapse" {...props} />
       </div>
-      <p className="mt-2 text-[11px] text-ink-mute sm:hidden">
+      <p className="mt-2 font-mono text-[10px] tracking-[0.04em] text-ink-mute sm:hidden">
         표가 넓어 옆으로 넘겨 볼 수 있습니다.
       </p>
     </div>
@@ -45,7 +45,7 @@ function MdxImage(props: ComponentPropsWithoutRef<"img">) {
       alt={alt}
       loading="lazy"
       decoding="async"
-      className="rounded-xl border border-rule"
+      className="border border-rule"
       {...rest}
     />
   );

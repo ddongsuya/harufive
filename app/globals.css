@@ -2,22 +2,23 @@
 @plugin "@tailwindcss/typography";
 
 /*
-  하루다섯 디자인 토큰 — "작업대 위의 다섯 칸"
-  청자 사기빛 바탕 · 먹빛 글자 · 쪽빛 구조 · 주홍 신호.
+  harufive — 에디토리얼 인덱스
+  종이빛 바탕 · 먹빛 글자 · 1px 헤어라인 · 세리프 헤드라인.
   카테고리 색은 장식이 아니라 정보(어느 칸의 글인지)를 나른다.
 */
 @theme {
-  --color-canvas: #eceee7;
-  --color-surface: #f8f8f3;
-  --color-sunk: #e3e5dc;
+  --color-canvas: #f4f2ec;
+  --color-surface: #fbfaf6;
+  --color-sunk: #e8e5da;
   --color-ink: #101413;
-  --color-ink-soft: #39423f;
-  --color-ink-mute: #5b6562;
-  --color-rule: #cdd2c7;
+  --color-ink-soft: #3a403c;
+  --color-ink-mute: #62695f;
+  --color-rule: #d7d3c6;
+  --color-rule-soft: #e5e1d5;
   --color-deep: #0e1b2c;
   --color-deep-2: #17293f;
   --color-signal: #b8351b;
-  --color-signal-soft: #f0e2dd;
+  --color-signal-soft: #f1e3de;
   --color-indigo: #1f2f63;
   --color-jade: #1b5c4e;
   --color-clay: #8a4b23;
@@ -27,14 +28,16 @@
     "Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont,
     "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", "Segoe UI",
     system-ui, sans-serif;
+  /* 헤드라인용 세리프. 본문은 산세리프로 두고 제목만 명조로 세운다. */
+  --font-editorial:
+    "Noto Serif KR", "Nanum Myeongjo", "AppleMyungjo", "Noto Serif", Georgia,
+    "Times New Roman", serif;
   --font-display:
     var(--font-space-grotesk), "Space Grotesk", "Pretendard Variable",
     Pretendard, sans-serif;
   --font-mono:
     var(--font-jetbrains-mono), "JetBrains Mono", ui-monospace, SFMono-Regular,
     Menlo, monospace;
-
-  --radius-tile: 0.875rem;
 }
 
 @layer base {
@@ -65,81 +68,62 @@
 
   ::selection {
     background-color: #101413;
-    color: #f8f8f3;
+    color: #fbfaf6;
   }
 
   :focus-visible {
     outline: 2px solid var(--color-signal);
     outline-offset: 2px;
-    border-radius: 4px;
+    border-radius: 2px;
   }
 
   /* 머리말 고정 높이만큼 앵커 위치를 띄운다. */
   :target {
     scroll-margin-top: 6.5rem;
   }
+
+  /* 좁은 화면의 필터 줄은 가로로 넘긴다. 스크롤바는 감춘다. */
+  .no-scrollbar {
+    scrollbar-width: none;
+  }
+
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
 }
 
 @layer components {
-  /* 1px 실선으로 이어 붙인 벤토 판. 칸 사이 간격이 곧 선이 된다. */
-  .bento {
-    display: grid;
-    gap: 1px;
-    background-color: var(--color-rule);
-    border: 1px solid var(--color-rule);
-    border-radius: var(--radius-tile);
-    overflow: hidden;
-  }
-
-  .tile {
-    position: relative;
-    background-color: var(--color-surface);
-    padding: 1.5rem;
-    min-width: 0;
-  }
-
-  @media (min-width: 640px) {
-    .tile {
-      padding: 1.75rem;
-    }
-  }
-
-  .tile-deep {
-    background-color: var(--color-deep);
-    color: var(--color-surface);
-  }
-
-  /* 눈금이 살짝 보이는 작업대 바탕 — 대표 칸 뒤에만 쓴다. */
-  .bench-grid {
-    background-image:
-      linear-gradient(to right, rgba(248, 248, 243, 0.045) 1px, transparent 1px),
-      linear-gradient(to bottom, rgba(248, 248, 243, 0.045) 1px, transparent 1px);
-    background-size: 40px 40px;
-  }
-
+  /* 작은 대문자·숫자 라벨. 날짜, 인덱스, 구획 이름에 쓴다. */
   .label-mono {
     font-family: var(--font-mono);
-    font-size: 11px;
-    letter-spacing: 0.06em;
-    line-height: 1.4;
+    font-size: 10.5px;
+    letter-spacing: 0.08em;
+    line-height: 1.5;
   }
 
+  /* 인덱스 행이 바뀔 때의 짧은 등장. */
+  .index-enter {
+    animation: index-enter 260ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+
+  /* 필터 칩 — 행의 카테고리 라벨과 같은 언어(점 + 이름)를 쓴다. */
   .chip {
     display: inline-flex;
     align-items: center;
-    gap: 0.4rem;
+    gap: 0.45rem;
     border-radius: 999px;
     border: 1px solid var(--color-rule);
     background-color: transparent;
-    padding: 0.4rem 0.75rem;
-    font-size: 0.8125rem;
+    padding: 0.4rem 0.8rem;
+    font-size: 12px;
     font-weight: 500;
+    letter-spacing: 0.01em;
     color: var(--color-ink-soft);
     white-space: nowrap;
     transition:
-      background-color 160ms ease,
-      border-color 160ms ease,
-      color 160ms ease;
+      background-color 180ms ease,
+      border-color 180ms ease,
+      color 180ms ease;
   }
 
   .chip:hover {
@@ -153,20 +137,40 @@
     color: var(--color-surface);
   }
 
+  .chip[data-active="true"] .chip-dot {
+    background-color: var(--color-surface);
+  }
+
   .chip:focus-visible {
     outline-offset: 2px;
+  }
+
+  /* 인덱스 행. 칸 사이는 1px 세로 헤어라인으로만 나눈다. */
+  .row-cell-rail {
+    border-left: 1px solid var(--color-rule);
+  }
+}
+
+@keyframes index-enter {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
   }
 }
 
 /* ── 본문 타이포그래피 ─────────────────────────────────────────── */
 .article-prose {
-  --tw-prose-body: #2b3330;
+  --tw-prose-body: #2c322e;
   --tw-prose-headings: var(--color-ink);
   --tw-prose-lead: var(--color-ink-soft);
   --tw-prose-links: var(--color-signal);
   --tw-prose-bold: var(--color-ink);
   --tw-prose-counters: var(--color-signal);
-  --tw-prose-bullets: #b3b9ae;
+  --tw-prose-bullets: #b0b7ac;
   --tw-prose-hr: var(--color-rule);
   --tw-prose-quotes: var(--color-ink-soft);
   --tw-prose-quote-borders: var(--color-ink);
@@ -174,30 +178,33 @@
   --tw-prose-code: #8f2c17;
   --tw-prose-pre-code: #e9ece4;
   --tw-prose-pre-bg: var(--color-deep);
-  --tw-prose-th-borders: #bcc2b7;
+  --tw-prose-th-borders: #c3c8bc;
   --tw-prose-td-borders: var(--color-rule);
   font-size: 1.0625rem;
-  line-height: 1.85;
+  line-height: 1.9;
   letter-spacing: -0.003em;
   word-break: keep-all;
   overflow-wrap: anywhere;
 }
 
 .article-prose :where(h2) {
-  margin-top: 2.7em;
-  margin-bottom: 0.9em;
-  font-size: 1.4375rem;
-  line-height: 1.45;
-  letter-spacing: -0.03em;
+  margin-top: 2.9em;
+  margin-bottom: 0.85em;
+  font-family: var(--font-editorial);
+  font-size: 1.5rem;
+  font-weight: 600;
+  line-height: 1.5;
+  letter-spacing: -0.025em;
   scroll-margin-top: 6.5rem;
 }
 
 .article-prose :where(h3) {
-  margin-top: 2em;
-  margin-bottom: 0.65em;
-  font-size: 1.125rem;
-  line-height: 1.55;
-  letter-spacing: -0.02em;
+  margin-top: 2.1em;
+  margin-bottom: 0.6em;
+  font-size: 1.0625rem;
+  font-weight: 700;
+  line-height: 1.6;
+  letter-spacing: -0.015em;
   scroll-margin-top: 6.5rem;
 }
 
@@ -205,16 +212,16 @@
   content: "";
   display: block;
   width: 1.5rem;
-  height: 2px;
-  margin-bottom: 0.85rem;
+  height: 1px;
+  margin-bottom: 0.95rem;
   background-color: var(--color-signal);
 }
 
 .article-prose :where(a) {
   text-decoration-line: underline;
   text-decoration-thickness: 1px;
-  text-underline-offset: 3px;
-  text-decoration-color: color-mix(in srgb, var(--color-signal) 35%, transparent);
+  text-underline-offset: 4px;
+  text-decoration-color: color-mix(in srgb, var(--color-signal) 30%, transparent);
 }
 
 .article-prose :where(a:hover) {
@@ -223,12 +230,16 @@
 
 .article-prose :where(strong) {
   font-weight: 700;
+  color: var(--color-ink);
 }
 
+/* 표: 상자 대신 헤어라인으로만 나눈다. */
 .article-prose :where(table) {
+  width: 100%;
   font-size: 0.9375rem;
-  line-height: 1.65;
+  line-height: 1.7;
   word-break: keep-all;
+  border-collapse: collapse;
 }
 
 .article-prose :where(td) {
@@ -236,18 +247,36 @@
 }
 
 .article-prose :where(thead th) {
-  background-color: var(--color-sunk);
-  font-weight: 600;
+  background-color: transparent;
+  border-bottom: 1px solid var(--color-ink);
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  color: var(--color-ink-mute);
   white-space: nowrap;
+  text-align: left;
+}
+
+.article-prose :where(tbody tr) {
+  border-bottom: 1px solid var(--color-rule);
 }
 
 .article-prose :where(th, td) {
-  padding: 0.6rem 0.8rem;
+  padding: 0.7rem 0.85rem;
+}
+
+.article-prose :where(th:first-child, td:first-child) {
+  padding-left: 0;
+}
+
+.article-prose :where(th:last-child, td:last-child) {
+  padding-right: 0;
 }
 
 .article-prose :where(blockquote) {
   font-style: normal;
-  border-left-width: 2px;
+  border-left-width: 1px;
   border-left-color: var(--color-ink);
   background-color: transparent;
   padding: 0.15rem 0 0.15rem 1.15rem;
@@ -261,9 +290,9 @@
 
 .article-prose :where(code):not(pre code) {
   background-color: var(--color-sunk);
-  border-radius: 0.25rem;
-  padding: 0.12em 0.35em;
-  font-size: 0.875em;
+  border-radius: 0.2rem;
+  padding: 0.1em 0.32em;
+  font-size: 0.86em;
   font-weight: 500;
 }
 
@@ -287,8 +316,19 @@
   font-size: inherit;
 }
 
+.article-prose :where(hr) {
+  margin: 2.6em 0;
+  border-color: var(--color-rule);
+}
+
 .article-prose :where(ul > li)::marker {
   color: var(--color-signal);
+}
+
+.article-prose :where(ol > li)::marker {
+  font-family: var(--font-mono);
+  font-size: 0.8em;
+  color: var(--color-ink-mute);
 }
 
 .article-prose :where(input[type="checkbox"]) {
@@ -307,7 +347,7 @@
 }
 
 .article-prose :where(img) {
-  border-radius: 0.75rem;
+  border-radius: 2px;
 }
 
 /* 광고 슬롯이 비어 있을 때 생기는 빈 공간 방지 */

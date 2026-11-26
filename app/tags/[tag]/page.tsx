@@ -1,12 +1,14 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ArrowRight } from "lucide-react";
-import { PostTile } from "@/components/post-tile";
+import { ArrowUpRight } from "lucide-react";
+import { PostIndex } from "@/components/post-index";
 import { site } from "@/lib/site";
 import { getAllTags, getPostsByTag, tagPath, toSummary } from "@/lib/posts";
 
 type Params = { tag: string };
+
+const pad = (value: number) => String(value).padStart(2, "0");
 
 export function generateStaticParams(): Params[] {
   return getAllTags().map((tag) => ({ tag: tag.slug }));
@@ -52,75 +54,84 @@ export default async function TagPage({
 
   return (
     <div className="mx-auto w-full max-w-[1180px] px-5 sm:px-8">
-      <nav aria-label="위치" className="pt-8">
-        <ol className="label-mono flex items-center gap-2 text-ink-mute">
+      <nav
+        aria-label="위치"
+        className="flex items-center justify-between gap-4 border-b border-rule py-3.5"
+      >
+        <ol className="label-mono flex min-w-0 items-center gap-2 text-ink-mute">
           <li>
             <Link href="/" className="transition-colors hover:text-ink">
               홈
             </Link>
           </li>
-          <li aria-hidden="true">/</li>
+          <li aria-hidden="true" className="opacity-50">
+            /
+          </li>
           <li>
             <Link href="/posts/" className="transition-colors hover:text-ink">
               태그
             </Link>
           </li>
-          <li aria-hidden="true">/</li>
-          <li className="text-ink-soft">#{name}</li>
+          <li aria-hidden="true" className="opacity-50">
+            /
+          </li>
+          <li className="truncate text-ink-soft">#{name}</li>
         </ol>
+        <span className="label-mono hidden shrink-0 text-ink-mute tabular-nums sm:block">
+          {pad(posts.length)} Article
+        </span>
       </nav>
 
-      <header className="mt-6 border-t-2 border-ink/15 pt-6">
-        <div className="flex flex-wrap items-end justify-between gap-5">
-          <div>
-            <p className="label-mono text-ink-mute">태그</p>
-            <h1 className="mt-2.5 text-[clamp(1.8rem,3.4vw,2.6rem)] font-bold leading-[1.2] tracking-[-0.04em] text-ink">
-              #{name}
-            </h1>
-          </div>
-          <p className="label-mono pb-1 text-ink-mute">{posts.length}편</p>
+      <header className="border-b border-rule pt-10 pb-8 sm:pt-14 sm:pb-10">
+        <p className="label-mono flex items-center gap-2 text-ink-mute">
+          <span aria-hidden="true" className="h-1 w-1 rounded-full bg-signal" />
+          태그
+        </p>
+        <div className="mt-4 flex flex-wrap items-end justify-between gap-6">
+          <h1 className="font-editorial text-[clamp(1.7rem,3.6vw,2.6rem)] font-semibold leading-[1.26] tracking-[-0.03em] text-ink">
+            #{name}
+          </h1>
+          <p className="label-mono pb-1 text-ink-mute tabular-nums">
+            {pad(posts.length)}편
+          </p>
         </div>
       </header>
 
-      <div
-        className={`bento mt-8 grid-cols-1 ${
-          posts.length >= 3
-            ? "sm:grid-cols-2 lg:grid-cols-3"
-            : posts.length === 2
-              ? "sm:grid-cols-2"
-              : ""
-        }`}
-      >
-        {posts.map((post, index) => (
-          <PostTile key={post.slug} post={post} lead={index === 0} />
-        ))}
+      <div className="mt-8">
+        <PostIndex posts={posts} />
       </div>
 
       {allTags.length > 0 ? (
-        <div className="mt-12 border-t border-rule pt-6">
-          <p className="label-mono text-ink-mute">다른 태그</p>
-          <ul className="mt-3 flex flex-wrap gap-2">
+        <section className="mt-16 border-t border-rule pt-6">
+          <div className="flex items-baseline justify-between gap-4">
+            <h2 className="label-mono text-ink-mute">다른 태그</h2>
+            <span className="label-mono text-ink-mute tabular-nums">
+              {pad(allTags.length)}
+            </span>
+          </div>
+          <ul className="mt-4 flex flex-wrap gap-1.5">
             {allTags.map((item) => (
               <li key={item.slug}>
                 <Link
                   href={tagPath(item.name)}
-                  className="inline-flex rounded-md border border-rule px-2.5 py-1 text-[11.5px] text-ink-soft transition-colors hover:border-ink hover:text-ink"
+                  className="inline-flex items-center gap-1.5 border border-rule px-2 py-1 font-mono text-[10.5px] tracking-[0.02em] text-ink-soft transition-colors hover:border-ink hover:text-ink"
                 >
                   #{item.name}
+                  <span className="text-ink-mute/60 tabular-nums">{item.count}</span>
                 </Link>
               </li>
             ))}
           </ul>
-        </div>
+        </section>
       ) : null}
 
-      <p className="mt-10">
+      <p className="mt-12 border-t border-rule pt-6">
         <Link
           href="/posts/"
-          className="inline-flex items-center gap-1.5 text-[12.5px] font-semibold text-ink-soft transition-colors hover:text-ink"
+          className="inline-flex items-center gap-1.5 font-mono text-[10.5px] uppercase tracking-[0.08em] text-ink-soft transition-colors hover:text-ink"
         >
           전체 글 보기
-          <ArrowRight className="h-3.5 w-3.5" strokeWidth={2} />
+          <ArrowUpRight className="h-3 w-3" strokeWidth={2} />
         </Link>
       </p>
     </div>

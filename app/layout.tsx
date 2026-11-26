@@ -89,7 +89,7 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: "#eceee7",
+  themeColor: "#f4f2ec",
   width: "device-width",
   initialScale: 1,
 };
@@ -101,9 +101,16 @@ export default function RootLayout({
     <html lang="ko" className={`${display.variable} ${mono.variable}`}>
       <head>
         <link rel="preconnect" href="https://cdn.jsdelivr.net" crossOrigin="" />
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="" />
         <link
           rel="stylesheet"
           href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css"
+        />
+        {/* 헤드라인용 명조. 본문(Pretendard)과 대비를 만든다. */}
+        <link
+          rel="stylesheet"
+          href="https://fonts.googleapis.com/css2?family=Noto+Serif+KR:wght@400;500;600;700&display=swap"
         />
       </head>
       <body className="flex min-h-screen flex-col bg-canvas text-ink">

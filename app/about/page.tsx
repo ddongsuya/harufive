@@ -96,16 +96,16 @@ export default function AboutPage() {
         </p>
       </div>
 
-      <div className="mt-10 flex flex-wrap gap-3">
+      <div className="mt-10 flex flex-wrap gap-2">
         <Link
           href="/posts/"
-          className="rounded-full bg-ink px-5 py-2.5 text-[13px] font-semibold text-surface transition-colors hover:bg-ink/90"
+          className="bg-ink px-5 py-2.5 text-[12.5px] font-semibold text-surface transition-colors hover:bg-ink/90"
         >
           글 전체 보기
         </Link>
         <Link
           href="/contact/"
-          className="rounded-full border border-rule px-5 py-2.5 text-[13px] font-semibold text-ink-soft transition-colors hover:border-ink hover:text-ink"
+          className="border border-rule px-5 py-2.5 text-[12.5px] font-semibold text-ink-soft transition-colors hover:border-ink hover:text-ink"
         >
           문의하기
         </Link>

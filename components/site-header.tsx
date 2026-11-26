@@ -15,15 +15,16 @@ const navItems = [
   { href: "/contact/", label: "문의", match: ["/contact"] },
 ];
 
-/** 하루 다섯 칸을 닮은 표식 — 네 칸과 세로로 긴 한 칸. */
+/** 다섯 칸을 닮은 눈금 표식 — 높이가 다른 세로선 다섯, 마지막 하나만 신호색. */
 function LogoMark() {
   return (
-    <span aria-hidden="true" className="grid h-7 w-7 grid-cols-3 grid-rows-2 gap-[2px]">
-      <span className="rounded-[1px] bg-ink" />
-      <span className="rounded-[1px] bg-ink" />
-      <span className="row-span-2 rounded-[1px] bg-signal" />
-      <span className="rounded-[1px] bg-ink" />
-      <span className="rounded-[1px] bg-ink" />
+    <span aria-hidden="true" className="flex h-4 items-end gap-[3px]">
+      {["h-1.5", "h-2.5", "h-3", "h-3.5", "h-4"].map((height, index) => (
+        <span
+          key={height}
+          className={`w-px ${height} ${index === 4 ? "bg-signal" : "bg-ink"}`}
+        />
+      ))}
     </span>
   );
 }
@@ -31,15 +32,7 @@ function LogoMark() {
 export function SiteHeader() {
   const pathname = usePathname() || "/";
   const [open, setOpen] = useState(false);
-  const [scrolled, setScrolled] = useState(false);
   const reduce = useReducedMotion();
-
-  useEffect(() => {
-    const onScroll = () => setScrolled(window.scrollY > 8);
-    onScroll();
-    window.addEventListener("scroll", onScroll, { passive: true });
-    return () => window.removeEventListener("scroll", onScroll);
-  }, []);
 
   useEffect(() => {
     setOpen(false);
@@ -53,30 +46,29 @@ export function SiteHeader() {
   }, [open]);
 
   const isActive = (match: string[]) =>
-    match.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`));
+    match.some(
+      (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
+    );
 
   return (
     <>
-      <header
-        className={[
-          "sticky top-0 z-50 border-b transition-colors duration-300",
-          scrolled
-            ? "border-rule bg-canvas shadow-[0_1px_0_0_rgba(16,20,19,0.04)]"
-            : "border-transparent bg-canvas",
-        ].join(" ")}
-      >
+      <header className="sticky top-0 z-50 border-b border-rule bg-canvas/95 backdrop-blur-md">
         <div className="mx-auto flex h-16 w-full max-w-[1180px] items-center justify-between gap-6 px-5 sm:px-8">
-          <Link href="/" className="group flex items-center gap-2.5" aria-label={`${site.name} 홈`}>
+          <Link
+            href="/"
+            className="group flex items-baseline gap-2.5"
+            aria-label={`${site.name} 홈`}
+          >
             <LogoMark />
-            <span className="flex items-baseline gap-2">
-              <span className="text-[17px] font-bold tracking-tight text-ink">{site.name}</span>
-              <span className="font-display hidden text-[12.5px] font-medium tracking-[0.02em] text-ink-mute sm:inline">
-                {site.latinName}.kr
-              </span>
+            <span className="font-editorial text-[18px] font-semibold tracking-[-0.02em] text-ink">
+              {site.name}
+            </span>
+            <span className="hidden font-mono text-[10px] tracking-[0.08em] text-ink-mute sm:inline">
+              harufive.kr
             </span>
           </Link>
 
-          <nav aria-label="주요 메뉴" className="hidden items-center gap-1 sm:flex">
+          <nav aria-label="주요 메뉴" className="hidden items-center gap-7 sm:flex">
             {navItems.map((item) => {
               const active = isActive(item.match);
               return (
@@ -84,43 +76,44 @@ export function SiteHeader() {
                   key={item.href}
                   href={item.href}
                   aria-current={active ? "page" : undefined}
-                  className="relative rounded-full px-3.5 py-2 text-[13.5px] font-semibold text-ink-soft transition-colors hover:text-ink"
+                  className={[
+                    "group/nav relative py-1 text-[12.5px] tracking-[0.01em] transition-colors",
+                    active
+                      ? "font-semibold text-ink"
+                      : "font-medium text-ink-mute hover:text-ink",
+                  ].join(" ")}
                 >
-                  {active ? (
-                    <motion.span
-                      layoutId="nav-pill"
-                      className="absolute inset-0 -z-10 rounded-full bg-ink"
-                      transition={
-                        reduce
-                          ? { duration: 0 }
-                          : { type: "spring", stiffness: 420, damping: 34 }
-                      }
-                    />
-                  ) : null}
-                  <span className={active ? "relative text-surface" : "relative"}>
-                    {item.label}
-                  </span>
+                  {item.label}
+                  <span
+                    aria-hidden="true"
+                    className={[
+                      "absolute inset-x-0 -bottom-px h-px origin-left bg-ink transition-transform duration-300",
+                      active
+                        ? "scale-x-100"
+                        : "scale-x-0 group-hover/nav:scale-x-100",
+                    ].join(" ")}
+                  />
                 </Link>
               );
             })}
 
             <a
               href="/feed.xml"
-              className="ml-1 inline-flex h-9 w-9 items-center justify-center rounded-full border border-rule text-ink-soft transition-colors hover:border-ink hover:text-ink"
+              className="ml-1 inline-flex h-8 w-8 items-center justify-center rounded-full border border-rule text-ink-soft transition-colors hover:border-ink hover:text-ink"
               aria-label="RSS 피드"
             >
-              <Rss className="h-4 w-4" strokeWidth={1.8} />
+              <Rss className="h-3.5 w-3.5" strokeWidth={1.7} />
             </a>
           </nav>
 
           <button
             type="button"
             onClick={() => setOpen(true)}
-            className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-rule text-ink sm:hidden"
+            className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-rule text-ink sm:hidden"
             aria-label="메뉴 열기"
             aria-expanded={open}
           >
-            <Menu className="h-5 w-5" strokeWidth={1.8} />
+            <Menu className="h-5 w-5" strokeWidth={1.7} />
           </button>
         </div>
       </header>
@@ -130,52 +123,64 @@ export function SiteHeader() {
           <motion.div
             key="drawer"
             className="fixed inset-0 z-[60] flex flex-col bg-canvas sm:hidden"
-            initial={{ opacity: 0, y: reduce ? 0 : -12 }}
+            initial={{ opacity: 0, y: reduce ? 0 : -10 }}
             animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: reduce ? 0 : -12 }}
+            exit={{ opacity: 0, y: reduce ? 0 : -10 }}
             transition={{ duration: reduce ? 0 : 0.22, ease: [0.22, 1, 0.36, 1] }}
           >
             <div className="flex h-16 items-center justify-between border-b border-rule px-5">
-              <span className="flex items-center gap-2.5">
+              <span className="flex items-baseline gap-2.5">
                 <LogoMark />
-                <span className="text-[17px] font-bold tracking-tight">{site.name}</span>
+                <span className="font-editorial text-[18px] font-semibold tracking-[-0.02em]">
+                  {site.name}
+                </span>
               </span>
               <button
                 type="button"
                 onClick={() => setOpen(false)}
-                className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-rule"
+                className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-rule"
                 aria-label="메뉴 닫기"
               >
-                <X className="h-5 w-5" strokeWidth={1.8} />
+                <X className="h-5 w-5" strokeWidth={1.7} />
               </button>
             </div>
 
-            <nav aria-label="모바일 메뉴" className="flex-1 overflow-y-auto px-5 py-6">
-              <ul className="space-y-1">
-                {navItems.map((item) => (
+            <nav aria-label="모바일 메뉴" className="flex-1 overflow-y-auto px-5 py-4">
+              <ul className="border-t border-rule">
+                {navItems.map((item, index) => (
                   <li key={item.href}>
                     <Link
                       href={item.href}
-                      className="flex items-center justify-between border-b border-rule/70 py-3.5 text-[19px] font-bold tracking-tight text-ink"
+                      className="flex items-baseline justify-between gap-4 border-b border-rule py-4"
                     >
-                      {item.label}
-                      <ArrowUpRight className="h-5 w-5 text-ink-mute" strokeWidth={1.6} />
+                      <span className="flex items-baseline gap-3">
+                        <span className="font-mono text-[10px] tabular-nums text-ink-mute">
+                          {String(index + 1).padStart(2, "0")}
+                        </span>
+                        <span className="font-editorial text-[22px] font-semibold tracking-[-0.02em] text-ink">
+                          {item.label}
+                        </span>
+                      </span>
+                      <ArrowUpRight
+                        className="h-4 w-4 self-center text-ink-mute"
+                        strokeWidth={1.6}
+                      />
                     </Link>
                   </li>
                 ))}
               </ul>
 
               <p className="label-mono mt-8 text-ink-mute">카테고리</p>
-              <ul className="mt-3 space-y-3">
+              <ul className="mt-2 border-t border-rule">
                 {categories.map((category) => (
                   <li key={category.slug}>
                     <Link
                       href={categoryPath(category.slug)}
-                      className="flex items-center gap-2.5 text-[15px] font-medium text-ink-soft"
+                      className="flex items-center gap-2.5 border-b border-rule py-3 text-[14px] text-ink-soft"
                     >
                       <span
                         aria-hidden="true"
-                        className={`h-2 w-2 rounded-full ${toneStyles[categoryTone(category.slug)].solid}`}
+                        className={`h-1 w-1 rounded-full ${toneStyles[categoryTone(category.slug)].solid}`}
                       />
                       {category.name}
                     </Link>
@@ -185,10 +190,10 @@ export function SiteHeader() {
 
               <a
                 href="/feed.xml"
-                className="mt-8 inline-flex items-center gap-2 rounded-full border border-rule px-4 py-2 text-[13px] font-semibold text-ink-soft"
+                className="mt-8 inline-flex items-center gap-2 border-b border-ink pb-1 font-mono text-[10.5px] uppercase tracking-[0.08em] text-ink"
               >
-                <Rss className="h-4 w-4" strokeWidth={1.8} />
-                RSS로 구독
+                <Rss className="h-3.5 w-3.5" strokeWidth={1.7} />
+                RSS
               </a>
             </nav>
           </motion.div>

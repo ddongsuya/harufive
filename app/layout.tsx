@@ -103,6 +103,8 @@ export default function RootLayout({
         <link rel="preconnect" href="https://cdn.jsdelivr.net" crossOrigin="" />
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="" />
+        {/* 방문자 수 카운터(countapi). 첫 방문에서 숫자가 늦게 뜨지 않게 미리 연결한다. */}
+        <link rel="preconnect" href="https://countapi.mileshilliard.com" crossOrigin="" />
         <link
           rel="stylesheet"
           href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css"

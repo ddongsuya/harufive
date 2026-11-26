@@ -3,6 +3,7 @@ import { ArrowUpRight, Rss } from "lucide-react";
 import { categories, categoryTone, site } from "@/lib/site";
 import { categoryPath } from "@/lib/urls";
 import { toneStyles } from "./tone";
+import { VisitorStats } from "./visitor-stats";
 
 const groups = [
   {
@@ -93,7 +94,9 @@ export function SiteFooter() {
           <p className="font-mono text-[10px] leading-relaxed tracking-[0.04em] text-ink-mute">
             © {year} {site.name} ({site.latinName}.kr) · 운영 {site.author.name}
           </p>
-          <div className="flex items-center gap-5 font-mono text-[10px] tracking-[0.04em] text-ink-mute">
+          <div className="flex flex-wrap items-center gap-x-5 gap-y-2 font-mono text-[10px] tracking-[0.04em] text-ink-mute">
+            <VisitorStats />
+            <span aria-hidden="true" className="h-3 w-px bg-rule" />
             <a
               href="/feed.xml"
               className="inline-flex items-center gap-1.5 transition-colors hover:text-ink"

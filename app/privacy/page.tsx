@@ -19,7 +19,8 @@ export default function PrivacyPage() {
       title="개인정보처리방침"
       meta={
         <>
-          시행일 {updated} · 운영자 {site.author.name}
+          시행일 {updated} · 운영자 {site.author.name} · 2026년 11월 26일 방문자 수
+          집계 항목 보완
         </>
       }
     >
@@ -58,6 +59,11 @@ export default function PrivacyPage() {
               <td>이용자가 보낸 정보</td>
               <td>문의 메일의 주소, 본문, 첨부파일</td>
               <td>문의 응대</td>
+            </tr>
+            <tr>
+              <td>방문자 수 집계</td>
+              <td>페이지 방문 횟수(개인 식별 정보 없음)</td>
+              <td>방문자 수 표시</td>
             </tr>
           </tbody>
         </table>
@@ -139,6 +145,12 @@ export default function PrivacyPage() {
             <strong>광고</strong>: Google LLC (Google AdSense) — 광고 게재와 성과
             측정. 쿠키 기반 정보가 미국 등 Google 데이터센터로 이전될 수
             있습니다.
+          </li>
+          <li>
+            <strong>방문자 수</strong>: Count API(countapi.mileshilliard.com) — 페이지
+            방문 횟수 집계. 사이트가 방문 횟수만 전송하며, 이름·이메일 같은 개인
+            식별 정보는 전송하지 않습니다. 집계는 브라우저 한 대당 하루 한 번만
+            이루어지며, 이때 사이트가 브라우저에 방문 날짜를 기억시킵니다.
           </li>
         </ul>
         <p>
